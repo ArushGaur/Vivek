@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>J.A.R.V.I.S — Grok Neural Interface</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Boot Overlay -->
+<div id="boot-overlay">
+  <div id="boot-logo">J.A.R.V.I.S</div>
+  <div id="boot-subtitle">JUST A RATHER VERY INTELLIGENT SYSTEM</div>
+  <div id="boot-lines">
+    <div class="boot-line" id="bl1">▸ INITIALIZING NEURAL INTERFACE...</div>
+    <div class="boot-line" id="bl2">▸ LOADING GROK PROTOCOL v4.1...</div>
+    <div class="boot-line" id="bl3">▸ CALIBRATING HOLOGRAPHIC SYSTEMS...</div>
+    <div class="boot-line" id="bl4">▸ STARK INDUSTRIES ENCRYPTION: ACTIVE...</div>
+    <div class="boot-line" id="bl5">▸ SPHERICAL PARTICLE MATRIX: ONLINE...</div>
+    <div class="boot-line" id="bl6">▸ VOICE SYNTHESIS ENGINE: READY...</div>
+  </div>
+  <div id="boot-bar-wrap">
+    <div id="boot-bar"></div>
+    <div id="boot-pct">0%</div>
+  </div>
+</div>
+
+<!-- HUD Background Canvas -->
+<canvas id="hud-canvas"></canvas>
+
+<!-- Main App -->
+<div id="app">
+
+  <!-- Header -->
+  <header id="header">
+    <div class="header-left">
+      <div id="arc-reactor">
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="50" cy="50" r="45" fill="none" stroke="#00d4ff" stroke-width="1.5" opacity="0.4"/>
+          <circle cx="50" cy="50" r="36" fill="none" stroke="#00d4ff" stroke-width="1" opacity="0.5"/>
+          <circle cx="50" cy="50" r="22" fill="rgba(0,212,255,0.08)" stroke="#00d4ff" stroke-width="2"/>
+          <circle cx="50" cy="50" r="9" fill="#00d4ff" opacity="0.95"/>
+          <circle cx="50" cy="50" r="5" fill="#fff" opacity="0.8"/>
+          <line x1="50" y1="5"  x2="50" y2="28"  stroke="#00d4ff" stroke-width="2" opacity="0.7"/>
+          <line x1="50" y1="72" x2="50" y2="95"  stroke="#00d4ff" stroke-width="2" opacity="0.7"/>
+          <line x1="5"  y1="50" x2="28" y2="50"  stroke="#00d4ff" stroke-width="2" opacity="0.7"/>
+          <line x1="72" y1="50" x2="95" y2="50"  stroke="#00d4ff" stroke-width="2" opacity="0.7"/>
+          <line x1="19" y1="19" x2="34" y2="34"  stroke="#00d4ff" stroke-width="1.5" opacity="0.5"/>
+          <line x1="66" y1="66" x2="81" y2="81"  stroke="#00d4ff" stroke-width="1.5" opacity="0.5"/>
+          <line x1="81" y1="19" x2="66" y2="34"  stroke="#00d4ff" stroke-width="1.5" opacity="0.5"/>
+          <line x1="34" y1="66" x2="19" y2="81"  stroke="#00d4ff" stroke-width="1.5" opacity="0.5"/>
+        </svg>
+      </div>
+      <div class="logo-text">
+        <h1>J.A.R.V.I.S</h1>
+        <p>JUST A RATHER VERY INTELLIGENT SYSTEM &middot; GROK NEURAL CORE v4.1</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="status-item">
+        <div class="status-val" id="time-display">00:00:00</div>
+        <div class="status-label-sm">SYSTEM TIME</div>
+      </div>
+      <div class="status-item">
+        <div class="status-val" id="date-display">--/--/----</div>
+        <div class="status-label-sm">STARDATE</div>
+      </div>
+      <div class="status-item">
+        <div class="status-val">GROK-4.1</div>
+        <div class="status-label-sm">AI CORE</div>
+      </div>
+      <div class="status-item">
+        <div class="status-val" id="conn-status-header">STANDBY</div>
+        <div class="status-label-sm">CONNECTION</div>
+      </div>
+      <div class="status-dot" id="status-dot" title="System Status"></div>
+    </div>
+  </header>
+
+  <!-- Main Grid -->
+  <div id="main">
+
+    <!-- LEFT PANEL -->
+    <aside class="panel" id="left-panel">
+      <div class="panel-title">SYSTEM DIAGNOSTICS</div>
+
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">ARC REACTOR</span><span class="stat-val">94%</span></div>
+        <div class="stat-bar"><div class="stat-fill" style="width:94%"></div></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">NEURAL PROC</span><span class="stat-val" id="cpu-val">87%</span></div>
+        <div class="stat-bar"><div class="stat-fill" id="cpu-bar" style="width:87%"></div></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">MEMORY ALLOC</span><span class="stat-val" id="mem-val">72%</span></div>
+        <div class="stat-bar"><div class="stat-fill" id="mem-bar" style="width:72%"></div></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">GROK LATENCY</span><span class="stat-val" id="latency-val">--ms</span></div>
+        <div class="stat-bar"><div class="stat-fill" id="latency-bar" style="width:60%"></div></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">SHIELD MATRIX</span><span class="stat-val">100%</span></div>
+        <div class="stat-bar"><div class="stat-fill" style="width:100%;background:linear-gradient(90deg,#00aa55,#00ff88)"></div></div>
+      </div>
+
+      <div class="panel-title" style="margin-top:8px">XAI API KEY</div>
+      <div id="api-section">
+        <input type="password" id="api-key-input" placeholder="xai-xxxxxxxxxxxxxxxx" autocomplete="off">
+        <button id="save-key-btn" onclick="saveApiKey()">INITIALIZE CONNECTION</button>
+        <div id="key-status"></div>
+      </div>
+
+      <div class="panel-title" style="margin-top:8px">SESSION DATA</div>
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">MODEL</span><span class="stat-val" style="font-size:0.6rem">GROK-3</span></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">QUERIES</span><span class="stat-val" id="msg-counter">0</span></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">STATUS</span><span class="stat-val" id="conn-status" style="color:#00ff88">STANDBY</span></div>
+      </div>
+      <div class="stat-row">
+        <div class="stat-top"><span class="stat-label">VOICE</span>
+          <span class="stat-val" id="voice-status-label" style="color:var(--blue-dim)">OFF</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER: ORB + CHAT -->
+    <div id="center-panel">
+
+      <!-- JARVIS ORB -->
+      <div id="orb-container">
+        <div id="orb-rings">
+          <div class="orb-ring" id="ring1"></div>
+          <div class="orb-ring" id="ring2"></div>
+          <div class="orb-ring" id="ring3"></div>
+        </div>
+        <canvas id="orb-canvas"></canvas>
+        <div id="orb-state-label">IDLE</div>
+        <div id="orb-wave-bars">
+          <span></span><span></span><span></span><span></span>
+          <span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+
+      <!-- Voice Controls -->
+      <div id="voice-controls">
+        <button class="voice-btn" id="listen-btn" onclick="toggleListen()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+          LISTEN
+        </button>
+        <button class="voice-btn" id="stop-speak-btn" onclick="stopSpeaking()" style="display:none">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="6" y="6" width="12" height="12"/>
+          </svg>
+          STOP
+        </button>
+        <div id="voice-indicator">
+          <span class="vi-dot"></span>
+          <span id="voice-indicator-text">VOICE READY</span>
+        </div>
+      </div>
+
+      <!-- Chat Panel -->
+      <div class="panel" id="chat-panel">
+        <div class="panel-title">GROK NEURAL INTERFACE &middot; ENCRYPTED CHANNEL</div>
+        <div id="chat-messages"></div>
+        <div id="input-area">
+          <textarea id="chat-input" placeholder="Enter directive, Mr. Stark..." rows="1"></textarea>
+          <button id="send-btn" onclick="sendMessage()">TRANSMIT ▸</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT PANEL -->
+    <aside class="panel" id="right-panel">
+      <div class="panel-title">QUICK DIRECTIVES</div>
+      <div class="quick-cmd" onclick="quickSend('Run a full systems diagnostic and threat assessment.')">SYSTEMS DIAGNOSTIC</div>
+      <div class="quick-cmd" onclick="quickSend('What are the latest developments in AI and technology?')">AI INTEL REPORT</div>
+      <div class="quick-cmd" onclick="quickSend('Analyze the current geopolitical situation and give a threat matrix.')">THREAT MATRIX</div>
+      <div class="quick-cmd" onclick="quickSend('Calculate the most efficient flight path from New York to London at Mach 3.')">FLIGHT CALC</div>
+      <div class="quick-cmd" onclick="quickSend('Give me a witty one-liner about being an AI assistant.')">HUMOR.EXE</div>
+      <div class="quick-cmd" onclick="quickSend('What would Tony Stark say to motivate someone having a tough day?')">STARK PROTOCOL</div>
+      <div class="quick-cmd" onclick="quickSend('Explain quantum entanglement like I have a PhD in physics.')">QUANTUM BRIEF</div>
+      <div class="quick-cmd" onclick="clearChat()">⊘ CLEAR LOGS</div>
+
+      <div class="panel-title" style="margin-top:10px">NEURAL ACTIVITY</div>
+      <div class="radial-wrap">
+        <canvas id="radial-canvas" width="170" height="170"></canvas>
+      </div>
+
+      <div class="panel-title">MISSION LOG</div>
+      <div id="mission-log"></div>
+    </aside>
+
+  </div>
+
+  <!-- Footer -->
+  <footer id="footer">
+    <span>STARK INDUSTRIES &middot; CONFIDENTIAL &middot; CLEARANCE LEVEL OMEGA</span>
+    <span id="footer-status">ALL SYSTEMS NOMINAL</span>
+    <span>J.A.R.V.I.S v7.4.3 &middot; GROK NEURAL BRIDGE</span>
+  </footer>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
