@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>J.A.R.V.I.S</title>
+<title>V.I.V.E.K</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -11,7 +11,7 @@
 
 <!-- BOOT OVERLAY -->
 <div id="boot-overlay">
-  <div id="boot-logo">J.A.R.V.I.S</div>
+  <div id="boot-logo">V.I.V.E.K</div>
   <div id="boot-sub">NEURAL CORE INITIALIZING</div>
   <div id="boot-lines">
     <div class="bl" id="bl1">▸ QUANTUM MATRIX ONLINE</div>
@@ -27,38 +27,16 @@
 <!-- FULL-SCREEN SPHERE CANVAS -->
 <canvas id="orb-canvas"></canvas>
 
-<!-- JARVIS LABEL -->
-<div id="jarvis-label">J.A.R.V.I.S</div>
+<!-- VIVEK LABEL -->
+<div id="jarvis-label">V.I.V.E.K</div>
 
 <!-- STATE LABEL -->
 <div id="state-label">IDLE</div>
 
-<!-- TOP LEFT HUD -->
-<div id="top-left-hud">
-  <div id="personality-name">JARVIS</div>
-  <div id="color-name">CYAN</div>
-</div>
-
-<!-- TOP RIGHT HUD -->
-<div id="top-right-hud">
-  <div id="time-display">00:00:00</div>
-  <div id="conn-status">STANDBY</div>
-</div>
-
 <!-- TRANSCRIPT -->
 <div id="transcript-box">
-  <span id="transcript-text">Say something, Sir…</span>
+  <span id="transcript-text">Initializing voice detection…</span>
 </div>
-
-<!-- MIC BUTTON -->
-<button id="mic-btn" onclick="toggleListen()">
-  <svg id="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-    <line x1="12" y1="19" x2="12" y2="23"/>
-    <line x1="8" y1="23" x2="16" y2="23"/>
-  </svg>
-</button>
 
 <!-- STOP BUTTON -->
 <button id="stop-btn" onclick="stopSpeaking()">■ STOP</button>
@@ -71,13 +49,6 @@
     <button id="api-save" onclick="saveApiKey()">CONNECT</button>
     <div id="api-status"></div>
   </div>
-</div>
-
-<!-- VOICE COMMAND HINTS -->
-<div id="hint-box">
-  <div class="hint">🎤 "change color to red"</div>
-  <div class="hint">🎤 "switch to commander"</div>
-  <div class="hint">🎤 "change voice to deep"</div>
 </div>
 
 <!-- TOAST NOTIFICATION -->
