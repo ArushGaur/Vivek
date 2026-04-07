@@ -215,12 +215,14 @@ const canvas = document.getElementById('orb-canvas');
 const ctx    = canvas.getContext('2d');
 
 const ORB = {
-  cx: 0, cy: 0, R: 0,
+  cx: 0, cy: 0, R: 0,        // R = base radius set on resize
+  liveR: 0,                   // actual rendered radius (smoothly scaled)
+  targetScale: 1,             // 1 = normal, >1 = expanded, <1 = contracted
+  liveScale: 1,
   particles: [],
   rotY: 0, rotX: 0.32,
   mode: 0,      // 0=idle 1=thinking 2=speaking 3=listening
   energy: 0,
-  targetEnergy: 0,
   speakAmp: 0,
   listenAmp: 0,
   phase: 0,
@@ -232,8 +234,8 @@ function resizeCanvas() {
   canvas.height = window.innerHeight;
   ORB.cx = canvas.width  / 2;
   ORB.cy = canvas.height / 2;
-  // Sphere radius = 36% of the shorter screen dimension
   ORB.R  = Math.min(canvas.width, canvas.height) * 0.36;
+  if (!ORB.liveR) ORB.liveR = ORB.R;
   buildParticles();
 }
 
@@ -262,10 +264,9 @@ function project(p) {
   const cosX = Math.cos(ORB.rotX), sinX = Math.sin(ORB.rotX);
   const cosY = Math.cos(ORB.rotY), sinY = Math.sin(ORB.rotY);
 
-  // Drift (pulsation outward from sphere surface)
-  const drift = Math.sin(ORB.phase * p.speed + p.phase) * p.driftR * ORB.energy;
-  // Breathing (soft idle oscillation)
-  const breathe = Math.sin(ORB.breathe + p.phase * 0.5) * 0.018;
+  // Very subtle per-particle drift — kept minimal so sphere shape stays clean
+  const drift   = Math.sin(ORB.phase * p.speed + p.phase) * p.driftR * ORB.energy * 0.4;
+  const breathe = Math.sin(ORB.breathe + p.phase * 0.5) * 0.012;
   const scale3  = 1 + drift + breathe;
 
   const nx = p.ox * scale3, ny = p.oy * scale3, nz = p.oz * scale3;
@@ -278,134 +279,132 @@ function project(p) {
   const z2 = ny * sinX + z1 * cosX;
 
   p.sz = z2;
-  // Perspective
-  const fov   = 4.2;
+  const fov    = 4.2;
   const pscale = fov / (fov + z2);
-  p.sx    = ORB.cx + x1 * ORB.R * pscale;
-  p.sy    = ORB.cy + y2 * ORB.R * pscale;
+  // Use liveR (scaled radius) for screen projection
+  p.sx    = ORB.cx + x1 * ORB.liveR * pscale;
+  p.sy    = ORB.cy + y2 * ORB.liveR * pscale;
   p.scale = pscale;
-  p.depth = (z2 + 1) / 2; // 0=back 1=front
+  p.depth = (z2 + 1) / 2;
 }
 
 function drawSphere(ts) {
   ORB.phase   = ts * 0.001;
   ORB.breathe = ts * 0.00055;
 
-  // ── Smooth color interpolation toward target
+  // ── Smooth color interpolation
   liveColor.r += (targetColor.r - liveColor.r) * 0.04;
   liveColor.g += (targetColor.g - liveColor.g) * 0.04;
   liveColor.b += (targetColor.b - liveColor.b) * 0.04;
   const rc = Math.round(liveColor.r), gc = Math.round(liveColor.g), bc = Math.round(liveColor.b);
 
-  // ── Rotation speed by mode
-  const rotSpeed = ORB.mode === 2 ? 0.016 :
-                   ORB.mode === 3 ? 0.011 :
+  // ── Sphere radius scale targets
+  // listening: pulses between 1.0 and 1.12 with voice amplitude
+  // speaking:  pulses between 1.0 and 1.18 with voice amplitude
+  // idle/thinking: stays at 1.0 with gentle micro-breathe
+  let scaleTarget = 1.0;
+  if (ORB.mode === 3) {
+    // Listening — medium expand, rhythmic
+    scaleTarget = 1.0 + ORB.listenAmp * 0.12 + Math.sin(ORB.phase * 10) * 0.025;
+  } else if (ORB.mode === 2) {
+    // Speaking — bigger expand driven by amplitude
+    scaleTarget = 1.0 + ORB.speakAmp * 0.18 + Math.sin(ORB.phase * 8) * 0.02;
+  } else if (ORB.mode === 1) {
+    // Thinking — subtle slow pulse
+    scaleTarget = 1.0 + Math.sin(ORB.phase * 3) * 0.03;
+  } else {
+    // Idle — barely-there breathe
+    scaleTarget = 1.0 + Math.sin(ORB.breathe * 0.9) * 0.015;
+  }
+  // Smooth the scale — fast attack, moderate release
+  const scaleLerp = scaleTarget > ORB.liveScale ? 0.12 : 0.06;
+  ORB.liveScale += (scaleTarget - ORB.liveScale) * scaleLerp;
+  ORB.liveR = ORB.R * ORB.liveScale;
+
+  // ── Energy (used only for particle dot brightness & subtle drift)
+  let eTarget = 0;
+  if (ORB.mode === 0) eTarget = 0.05;
+  if (ORB.mode === 1) eTarget = 0.25 + Math.abs(Math.sin(ORB.phase * 4)) * 0.2;
+  if (ORB.mode === 2) eTarget = 0.3  + ORB.speakAmp * 0.5;
+  if (ORB.mode === 3) eTarget = 0.2  + ORB.listenAmp * 0.4;
+  ORB.energy += (eTarget - ORB.energy) * 0.07;
+
+  // ── Rotation speed
+  const rotSpeed = ORB.mode === 2 ? 0.014 :
+                   ORB.mode === 3 ? 0.010 :
                    ORB.mode === 1 ? 0.005 : 0.003;
   ORB.rotY += rotSpeed;
 
-  // ── Energy target by mode
-  let eTarget = 0;
-  if (ORB.mode === 0) eTarget = 0.04 + Math.abs(Math.sin(ORB.breathe * 0.8)) * 0.06;
-  if (ORB.mode === 1) eTarget = 0.2  + Math.abs(Math.sin(ORB.phase * 5)) * 0.55;
-  if (ORB.mode === 2) eTarget = 0.5  + ORB.speakAmp * 4.5 + Math.sin(ORB.phase * 11) * 0.35;
-  if (ORB.mode === 3) eTarget = 0.35 + ORB.listenAmp * 4.0 + Math.sin(ORB.phase * 14) * 0.4;
-  ORB.energy += (eTarget - ORB.energy) * 0.06;
-
-  // ── Project & depth-sort
+  // ── Project & sort
   ORB.particles.forEach(project);
   ORB.particles.sort((a, b) => a.sz - b.sz);
 
-  // ── Clear to pure black
+  // ── Clear
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // ── Massive outer atmosphere
-  const atmR = ORB.R * (1.6 + ORB.energy * 0.5);
-  const atm  = ctx.createRadialGradient(ORB.cx, ORB.cy, ORB.R * 0.5, ORB.cx, ORB.cy, atmR);
-  atm.addColorStop(0,   `rgba(${rc},${gc},${bc},0.045)`);
-  atm.addColorStop(0.5, `rgba(${rc},${gc},${bc},0.015)`);
-  atm.addColorStop(1,   `rgba(${rc},${gc},${bc},0)`);
-  ctx.fillStyle = atm;
-  ctx.beginPath(); ctx.arc(ORB.cx, ORB.cy, atmR, 0, Math.PI * 2); ctx.fill();
+  // ── Very subtle ambient fog — barely visible, just depth
+  const fogR = ORB.liveR * 1.35;
+  const fog  = ctx.createRadialGradient(ORB.cx, ORB.cy, ORB.liveR * 0.4, ORB.cx, ORB.cy, fogR);
+  fog.addColorStop(0,   `rgba(${rc},${gc},${bc},0.025)`);
+  fog.addColorStop(1,   `rgba(${rc},${gc},${bc},0)`);
+  ctx.fillStyle = fog;
+  ctx.beginPath(); ctx.arc(ORB.cx, ORB.cy, fogR, 0, Math.PI * 2); ctx.fill();
 
-  // ── Mid glow
-  const midR = ORB.R * (0.75 + ORB.energy * 0.35);
-  const mid  = ctx.createRadialGradient(ORB.cx, ORB.cy, 0, ORB.cx, ORB.cy, midR);
-  mid.addColorStop(0,   `rgba(${rc},${gc},${bc},0.18)`);
-  mid.addColorStop(0.55,`rgba(${rc},${gc},${bc},0.07)`);
-  mid.addColorStop(1,   `rgba(${rc},${gc},${bc},0)`);
-  ctx.fillStyle = mid;
-  ctx.beginPath(); ctx.arc(ORB.cx, ORB.cy, midR, 0, Math.PI * 2); ctx.fill();
-
-  // ── Particles
+  // ── Particles — clean dots, minimal glow
   ORB.particles.forEach(p => {
-    const alpha = 0.08 + p.depth * 0.92;
-    const sz    = (p.size + ORB.energy * 1.1) * p.scale;
-    if (sz < 0.2) return;
+    const depthAlpha = 0.1 + p.depth * 0.9;
+    const dotSize    = Math.max(0.3, (p.size * 0.7 + ORB.energy * 0.3) * p.scale);
 
-    // Per-particle glow for front hemisphere
-    if (p.depth > 0.4) {
-      const glR = sz * (2.5 + ORB.energy * 2.2);
-      const glA = alpha * (0.28 + ORB.energy * 0.22);
+    // Tiny soft glow — only on front-facing particles, very low opacity
+    if (p.depth > 0.55) {
+      const glR = dotSize * 2.8;                        // small halo
+      const glA = (depthAlpha * 0.08).toFixed(3);       // very faint
       const gl  = ctx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, glR);
-      gl.addColorStop(0,   `rgba(${rc},${gc},${bc},${glA.toFixed(3)})`);
-      gl.addColorStop(1,   `rgba(${rc},${gc},${bc},0)`);
+      gl.addColorStop(0, `rgba(${rc},${gc},${bc},${glA})`);
+      gl.addColorStop(1, `rgba(${rc},${gc},${bc},0)`);
       ctx.fillStyle = gl;
       ctx.beginPath(); ctx.arc(p.sx, p.sy, glR, 0, Math.PI * 2); ctx.fill();
     }
 
-    // Dot
+    // Crisp dot
     ctx.beginPath();
-    ctx.arc(p.sx, p.sy, Math.max(0.2, sz * 0.5), 0, Math.PI * 2);
-    ctx.fillStyle = `rgb(${rc},${gc},${bc})`;
-    ctx.globalAlpha = alpha * (0.4 + ORB.energy * 0.6);
+    ctx.arc(p.sx, p.sy, dotSize, 0, Math.PI * 2);
+    ctx.fillStyle  = `rgb(${rc},${gc},${bc})`;
+    ctx.globalAlpha = depthAlpha * (0.55 + ORB.energy * 0.35);
     ctx.fill();
     ctx.globalAlpha = 1;
   });
 
-  // ── Equatorial pulse rings
-  const ringsCount = ORB.mode === 0 ? 1 : ORB.mode === 1 ? 2 : 3;
-  for (let i = 0; i < ringsCount; i++) {
-    const rr  = ORB.R * (1.02 + i * 0.07 + Math.sin(ORB.phase * (8 + i * 3)) * 0.04 * ORB.energy);
-    const ra  = (0.06 + ORB.energy * 0.18) / (i + 1);
-    ctx.beginPath(); ctx.arc(ORB.cx, ORB.cy, rr, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(${rc},${gc},${bc},${ra.toFixed(3)})`;
-    ctx.lineWidth   = 0.8; ctx.stroke();
+  // ── Single thin equatorial ring — always present
+  ctx.beginPath();
+  ctx.arc(ORB.cx, ORB.cy, ORB.liveR * 1.01, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(${rc},${gc},${bc},0.07)`;
+  ctx.lineWidth = 0.6; ctx.stroke();
+
+  // ── Mode rings: listening gets 1 extra, speaking gets 2 extra — all thin & dim
+  if (ORB.mode === 3) {
+    const r2 = ORB.liveR * (1.055 + Math.sin(ORB.phase * 9) * 0.012);
+    ctx.beginPath(); ctx.arc(ORB.cx, ORB.cy, r2, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(${rc},${gc},${bc},0.1)`;
+    ctx.lineWidth = 0.6; ctx.stroke();
+  }
+  if (ORB.mode === 2) {
+    for (let i = 1; i <= 2; i++) {
+      const rw = ORB.liveR * (1.04 * i + Math.sin(ORB.phase * 7 * i) * 0.01);
+      ctx.beginPath(); ctx.arc(ORB.cx, ORB.cy, rw, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${rc},${gc},${bc},${(0.09 / i).toFixed(3)})`;
+      ctx.lineWidth = 0.5; ctx.stroke();
+    }
   }
 
-  // ── Bright inner core
-  const coreR = 14 + ORB.energy * 18;
+  // ── Core — small bright center
+  const coreR = 10 + ORB.energy * 8;
   const core  = ctx.createRadialGradient(ORB.cx, ORB.cy, 0, ORB.cx, ORB.cy, coreR);
-  core.addColorStop(0,   `rgba(255,255,255,${0.9 + ORB.energy * 0.1})`);
-  core.addColorStop(0.2, `rgba(${rc},${gc},${bc},0.95)`);
-  core.addColorStop(0.6, `rgba(${rc},${gc},${bc},0.3)`);
+  core.addColorStop(0,   'rgba(255,255,255,0.85)');
+  core.addColorStop(0.3, `rgba(${rc},${gc},${bc},0.7)`);
   core.addColorStop(1,   `rgba(${rc},${gc},${bc},0)`);
   ctx.fillStyle = core;
   ctx.beginPath(); ctx.arc(ORB.cx, ORB.cy, coreR, 0, Math.PI * 2); ctx.fill();
-
-  // ── Speaking: outer shockwave rings
-  if (ORB.mode === 2 && ORB.energy > 0.3) {
-    for (let i = 0; i < 3; i++) {
-      const wave = ORB.R * (1.1 + i * 0.12 + ORB.energy * 0.2 * i);
-      const wa   = Math.max(0, 0.12 - i * 0.03) * ORB.energy;
-      ctx.beginPath(); ctx.arc(ORB.cx, ORB.cy, wave, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(${rc},${gc},${bc},${wa.toFixed(3)})`;
-      ctx.lineWidth   = 1.2 - i * 0.3; ctx.stroke();
-    }
-  }
-
-  // ── Listening: inward pulse arc segments
-  if (ORB.mode === 3) {
-    const segs = 6;
-    for (let i = 0; i < segs; i++) {
-      const ang   = (ORB.phase * 2 + i * (Math.PI * 2 / segs));
-      const arcR  = ORB.R * (1.06 + ORB.listenAmp * 0.15);
-      const sweep = 0.4 + ORB.listenAmp * 0.3;
-      ctx.beginPath();
-      ctx.arc(ORB.cx, ORB.cy, arcR, ang, ang + sweep);
-      ctx.strokeStyle = `rgba(${rc},${gc},${bc},${(0.25 * ORB.energy).toFixed(3)})`;
-      ctx.lineWidth = 1.5; ctx.stroke();
-    }
-  }
 
   requestAnimationFrame(drawSphere);
 }
@@ -466,9 +465,9 @@ function pulseSpeaking() {
   if (speakIv) clearInterval(speakIv);
   speakIv = setInterval(() => {
     if (!isSpeaking) { clearInterval(speakIv); ORB.speakAmp = 0; return; }
-    // Organic amplitude simulation
-    ORB.speakAmp = 0.25 + Math.random() * 0.75;
-  }, 70);
+    // Simulate realistic voice amplitude: random bursts that decay
+    ORB.speakAmp = 0.2 + Math.random() * 0.8;
+  }, 90);
 }
 
 function stopSpeaking(resetMode = true) {
@@ -519,8 +518,7 @@ function startListening() {
     }
     const shown = finalTranscript || interim;
     if (shown) { txEl.textContent = shown; txEl.classList.add('active'); }
-    ORB.listenAmp = 0.3 + Math.random() * 0.7;
-  };
+    ORB.listenAmp = 0.3 + Math.random() * 0.7;  };
 
   recognition.onend = () => {
     isListening = false;
