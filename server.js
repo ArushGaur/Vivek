@@ -295,14 +295,29 @@ wss.on('connection', function(clientWs) {
     if (clientWs.readyState === WebSocket.OPEN) clientWs.send(msg);
   });
 
-  geminiWs.on('close', () => {
-    console.log('[VIVEK] Gemini WebSocket closed');
-    if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+  geminiWs.on('close', (code, reason) => {
+    const reasonStr = reason ? reason.toString() : 'no reason';
+    console.log(`[VIVEK] Gemini WebSocket closed — code: ${code}, reason: ${reasonStr}`);
+    if (code === 1008 || code === 4001 || code === 4003) {
+      console.error('[VIVEK] ❌ Gemini auth/permission error — check GEMINI_API_KEY and that Gemini Live API is enabled for your project.');
+    }
+    if (clientWs.readyState === WebSocket.OPEN) {
+      // Send error info to client before closing so it can display a message
+      try {
+        clientWs.send(JSON.stringify({ error: { message: `Gemini connection closed (code ${code}): ${reasonStr}` } }));
+      } catch(e) {}
+      clientWs.close();
+    }
   });
 
   geminiWs.on('error', (err) => {
     console.error('[VIVEK] Gemini WebSocket error:', err.message);
-    if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+    if (clientWs.readyState === WebSocket.OPEN) {
+      try {
+        clientWs.send(JSON.stringify({ error: { message: 'Gemini connection error: ' + err.message } }));
+      } catch(e) {}
+      clientWs.close();
+    }
   });
 
   clientWs.on('close', () => {
