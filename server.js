@@ -326,8 +326,8 @@ const wss = new WebSocketServer({ server: httpServer, path: '/gemini-proxy' });
 
 wss.on('connection', function(clientWs) {
   console.log('[VIVEK] WebSocket client connected');
-  // IMPORTANT: gemini-2.0-flash-live-001 requires v1alpha endpoint
-  const geminiUrl = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=' + process.env.GEMINI_API_KEY;
+  // gemini-3.1-flash-live-preview uses v1beta endpoint
+  const geminiUrl = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' + process.env.GEMINI_API_KEY;
   const geminiWs = new WebSocket(geminiUrl); // ← this line was missing!
 
   const messageQueue = [];
