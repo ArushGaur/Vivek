@@ -208,34 +208,35 @@ function detectAndSaveInstruction(text) {
 function saveInstructions() {
   try { 
     localStorage.setItem('vivek_instructions', JSON.stringify(learnedInstructions));
-    // Also save to backend
-    if (currentSessionId) {
-      fetch(`${BACKEND_URL}/api/instructions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ instructions: learnedInstructions })
-      }).catch(() => {});
-    }
   } catch(e) {}
+  // Always sync to Turso backend — independent of session
+  fetch(`${BACKEND_URL}/api/instructions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instructions: learnedInstructions })
+  }).catch(() => console.warn('[VIVEK] Could not sync instructions to backend'));
 }
 
 function loadInstructions() {
+  // First load from localStorage as fast fallback
   try {
     const stored = localStorage.getItem('vivek_instructions');
     if (stored) learnedInstructions = JSON.parse(stored);
   } catch(e) { learnedInstructions = []; }
   
-  // Also try loading from backend
+  // Then fetch from Turso — the authoritative source
   fetch(`${BACKEND_URL}/api/instructions`)
     .then(r => r.json())
     .then(data => {
       if (data.instructions && data.instructions.length > 0) {
-        // Merge, deduplicate
-        const combined = [...new Set([...learnedInstructions, ...data.instructions])];
-        learnedInstructions = combined.slice(-20);
+        // Turso is authoritative — use it, then merge any local-only ones
+        const tursoSet = new Set(data.instructions);
+        const localOnly = learnedInstructions.filter(i => !tursoSet.has(i));
+        learnedInstructions = [...data.instructions, ...localOnly].slice(-20);
         try { localStorage.setItem('vivek_instructions', JSON.stringify(learnedInstructions)); } catch(e) {}
+        console.log(`[VIVEK] Loaded ${learnedInstructions.length} instructions from Turso`);
       }
-    }).catch(() => {});
+    }).catch((e) => console.warn('[VIVEK] Could not load instructions from backend:', e.message));
 }
 
 /* ─────────────────────────────────────────────────────
@@ -598,28 +599,102 @@ function drawJarvisInterface(ts) {
     drawHexAt(pt.x, pt.y, sz, col, Math.min(1, pAlpha), false);
   }
 
-  // L4: Sphere
+  // L4: TRUE 3D SPHERE with full Phong lighting model
+  // Step 1: clip all sphere drawing inside circle
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+
+  // Step 1a: Deep base — dark side (light comes from top-left)
+  // Fill whole sphere with near-black base first
+  const baseGrad = ctx.createRadialGradient(cx - R*0.15, cy - R*0.15, R*0.01, cx + R*0.4, cy + R*0.5, R * 1.4);
+  baseGrad.addColorStop(0,   `rgba(${rc},${gc},${bc}, 0.06)`);
+  baseGrad.addColorStop(0.35,`rgba(${Math.round(rc*0.4)},${Math.round(gc*0.4)},${Math.round(bc*0.4)}, 0.18)`);
+  baseGrad.addColorStop(0.7, `rgba(0,0,0,0.55)`);
+  baseGrad.addColorStop(1,   `rgba(0,0,0,0.85)`);
+  ctx.fillStyle = baseGrad;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1b: Diffuse light — large soft zone from top-left light source
+  const diffuseX = cx - R * 0.30, diffuseY = cy - R * 0.28;
+  const diffuse = ctx.createRadialGradient(diffuseX, diffuseY, 0, diffuseX, diffuseY, R * 1.55);
+  diffuse.addColorStop(0,    `rgba(${col},${(0.42 + ORB.energy * 0.22).toFixed(3)})`);
+  diffuse.addColorStop(0.25, `rgba(${col},${(0.22 + ORB.energy * 0.12).toFixed(3)})`);
+  diffuse.addColorStop(0.55, `rgba(${col},${(0.07 + ORB.energy * 0.05).toFixed(3)})`);
+  diffuse.addColorStop(0.80, `rgba(${col},0.015)`);
+  diffuse.addColorStop(1,    `rgba(${col},0)`);
+  ctx.fillStyle = diffuse;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1c: Deep shadow on bottom-right (opposite the light)
+  const shadowX = cx + R * 0.38, shadowY = cy + R * 0.42;
+  const deepShadow = ctx.createRadialGradient(shadowX, shadowY, 0, shadowX, shadowY, R * 1.1);
+  deepShadow.addColorStop(0,   'rgba(0,0,0,0.72)');
+  deepShadow.addColorStop(0.4, 'rgba(0,0,0,0.45)');
+  deepShadow.addColorStop(0.75,'rgba(0,0,0,0.12)');
+  deepShadow.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = deepShadow;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1d: Primary specular highlight (sharp bright dot, top-left)
+  const specX = cx - R * 0.28, specY = cy - R * 0.30;
+  const specular1 = ctx.createRadialGradient(specX, specY, 0, specX, specY, R * 0.52);
+  specular1.addColorStop(0,    `rgba(255,255,255,${(0.88 + ORB.energy * 0.12).toFixed(3)})`);
+  specular1.addColorStop(0.08, `rgba(255,255,255,${(0.55 + ORB.energy * 0.1).toFixed(3)})`);
+  specular1.addColorStop(0.20, `rgba(255,248,220,${(0.22 + ORB.energy * 0.08).toFixed(3)})`);
+  specular1.addColorStop(0.45, `rgba(${col},${(0.08 + ORB.energy * 0.04).toFixed(3)})`);
+  specular1.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = specular1;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1e: Secondary specular — softer broader sheen
+  const spec2X = cx - R * 0.18, spec2Y = cy - R * 0.22;
+  const specular2 = ctx.createRadialGradient(spec2X, spec2Y, 0, spec2X, spec2Y, R * 0.85);
+  specular2.addColorStop(0,    `rgba(255,255,255,${(0.18 + ORB.energy * 0.10).toFixed(3)})`);
+  specular2.addColorStop(0.30, `rgba(${col},${(0.10 + ORB.energy * 0.06).toFixed(3)})`);
+  specular2.addColorStop(0.65, `rgba(${col},${(0.02 + ORB.energy * 0.02).toFixed(3)})`);
+  specular2.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = specular2;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1f: Energy glow core (pulsing inner light — arc reactor effect)
+  const coreEnergyGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.75);
+  coreEnergyGlow.addColorStop(0,    `rgba(${col},${(0.10 + ORB.energy * 0.25).toFixed(3)})`);
+  coreEnergyGlow.addColorStop(0.35, `rgba(${col},${(0.04 + ORB.energy * 0.10).toFixed(3)})`);
+  coreEnergyGlow.addColorStop(0.7,  `rgba(${col},${(0.01 + ORB.energy * 0.03).toFixed(3)})`);
+  coreEnergyGlow.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = coreEnergyGlow;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  ctx.restore(); // end clip
+
+  // Step 2: Rim / edge glow — outer sphere border
+  // Sharp rim with color
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(${col},${(0.3 + ORB.energy * 0.4).toFixed(3)})`; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(${col},${(0.1 + ORB.energy * 0.15).toFixed(3)})`; ctx.lineWidth = 6 + ORB.energy * 6; ctx.stroke();
+  ctx.strokeStyle = `rgba(${col},${(0.55 + ORB.energy * 0.35).toFixed(3)})`;
+  ctx.lineWidth = 1.2; ctx.stroke();
 
-  const shadow = ctx.createRadialGradient(cx + R*0.3, cy + R*0.3, R*0.1, cx, cy, R);
-  shadow.addColorStop(0, 'rgba(0,0,0,0.45)'); shadow.addColorStop(0.5, 'rgba(0,0,0,0.20)'); shadow.addColorStop(1, 'rgba(0,0,0,0.0)');
-  ctx.fillStyle = shadow; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+  // Soft outer glow halo
+  ctx.beginPath(); ctx.arc(cx, cy, R + 1, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(${col},${(0.18 + ORB.energy * 0.22).toFixed(3)})`;
+  ctx.lineWidth = 8 + ORB.energy * 10; ctx.stroke();
 
-  const inner = ctx.createRadialGradient(cx - R*0.35, cy - R*0.35, R*0.05, cx, cy, R);
-  inner.addColorStop(0,   `rgba(${col},${(0.18 + ORB.energy * 0.14).toFixed(3)})`);
-  inner.addColorStop(0.3, `rgba(${col},${(0.08 + ORB.energy * 0.07).toFixed(3)})`);
-  inner.addColorStop(0.7, `rgba(${col},${(0.025 + ORB.energy * 0.025).toFixed(3)})`);
-  inner.addColorStop(1,   `rgba(${col},0.002)`);
-  ctx.fillStyle = inner; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+  // Bright lit rim on top-left arc (where light hits the edge)
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, Math.PI * 1.1, Math.PI * 1.75);
+  ctx.strokeStyle = `rgba(255,255,255,${(0.12 + ORB.energy * 0.10).toFixed(3)})`;
+  ctx.lineWidth = 2.5; ctx.stroke();
 
-  const spec = ctx.createRadialGradient(cx - R*0.32, cy - R*0.30, 0, cx - R*0.32, cy - R*0.30, R * 0.38);
-  spec.addColorStop(0, `rgba(255,255,255,${(0.18 + ORB.energy * 0.10).toFixed(3)})`);
-  spec.addColorStop(0.3, `rgba(255,255,255,${(0.06 + ORB.energy * 0.04).toFixed(3)})`);
-  spec.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = spec; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+  // Step 3: Cast shadow below sphere (ground plane illusion)
+  const shadowEllipseY = cy + R * 0.88;
+  const shadowEll = ctx.createRadialGradient(cx, shadowEllipseY, 0, cx, shadowEllipseY, R * 0.9);
+  shadowEll.addColorStop(0,   'rgba(0,0,0,0.30)');
+  shadowEll.addColorStop(0.5, 'rgba(0,0,0,0.12)');
+  shadowEll.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.save();
+  ctx.scale(1, 0.3);
+  ctx.beginPath(); ctx.arc(cx, shadowEllipseY / 0.3, R * 0.85, 0, Math.PI * 2);
+  ctx.fillStyle = shadowEll; ctx.fill();
+  ctx.restore();
 
   // L5: Arc reactor rings
   for (const arc of ORB.reactorArcs) {
