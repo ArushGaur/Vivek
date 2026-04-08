@@ -525,6 +525,8 @@ function drawJarvisInterface(ts) {
 
   const rotSpeed = ORB.mode === 2 ? 0.008 : ORB.mode === 3 ? 0.007 : ORB.mode === 1 ? 0.005 : 0.002;
   ORB.rotY        += rotSpeed;
+  // Slow 3D wobble on X axis so the sphere looks truly 3-dimensional
+  ORB.rotX = 0.28 + Math.sin(ts * 0.00025) * 0.22;
   ORB.hexFrameAngle += 0.0015 + ORB.energy * 0.003;
   ORB.scanAngle   += 0.018 + ORB.energy * 0.025;
   ORB.depthAngle  += 0.001;
@@ -1226,7 +1228,7 @@ async function startGeminiSession(initialText) {
     if (liveWs !== ws) { ws.close(); return; }
     ws.send(JSON.stringify({
       setup: {
-        model: 'models/gemini-2.0-flash-live-001',
+        model: 'models/gemini-3.1-flash-live-preview',
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: {
