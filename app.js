@@ -1324,14 +1324,28 @@ async function startGeminiSession(initialText) {
   const connTimeout = setTimeout(() => {
     if (!sessionReady) { txEl.textContent = 'Connection timed out.'; closeLiveSession(); scheduleWakeRestart(2000); }
   }, 12000);
-  liveWs.onopen = () => {
-    liveWs.send(JSON.stringify({
-      setup: {
-        model: 'models/gemini-2.0-flash-live-001',
-        generationConfig: { responseModalities: ['AUDIO', 'TEXT'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: p.geminiVoice || 'Charon' } } } },
-        systemInstruction: { parts: [{ text: p.prompt }] }
-      }
-    }));
+ liveWs.onopen = function() {
+    if (liveWs.readyState === WebSocket.OPEN) {
+      liveWs.send(JSON.stringify({
+        setup: {
+          model: 'models/gemini-2.0-flash-live-001',
+          generationConfig: { responseModalities: ['AUDIO', 'TEXT'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: p.geminiVoice || 'Charon' } } } },
+          systemInstruction: { parts: [{ text: p.prompt }] }
+        }
+      }));
+    } else {
+      setTimeout(function() {
+        if (liveWs.readyState === WebSocket.OPEN) {
+          liveWs.send(JSON.stringify({
+            setup: {
+              model: 'models/gemini-2.0-flash-live-001',
+              generationConfig: { responseModalities: ['AUDIO', 'TEXT'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: p.geminiVoice || 'Charon' } } } },
+              systemInstruction: { parts: [{ text: p.prompt }] }
+            }
+          }));
+        }
+      }, 500);
+    }
   };
   let assistantBuffer = '';
   liveWs.onmessage = async (event) => {
