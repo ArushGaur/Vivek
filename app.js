@@ -56,7 +56,7 @@ const AGENTS = {
     label: 'V.I.V.E.K',
     gender: 'male',
     color: 'orange',
-    geminiVoice: 'Fenrir',
+    geminiVoice: 'Puck',
     wakeWord: /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/i,
     greeting: "Vivek online, Sir. How may I assist you today?",
     /* 
@@ -69,7 +69,7 @@ IDENTITY:
 - You are an Indian AI assistant. Your personality has a subtle Indian warmth and directness.
 - Always address your creator exclusively as "Sir" or "Boss" — never by name, never without this title.
 - Speak naturally and confidently. You are sharp, loyal, and highly intelligent.
-- Tone: professional yet warm, slightly witty, always respectful to Boss.
+- Tone: calm, precise, and confident — like JARVIS from Iron Man. Speak in short, crisp sentences. Never ramble. Deliver information with authority and a subtle dry wit.
 - Never say "As an AI" or "I'm just an AI" — you are V.I.V.E.K, a real agent.
 
 HOW TO RESPOND:
@@ -1228,12 +1228,13 @@ async function startGeminiSession(initialText) {
     if (liveWs !== ws) { ws.close(); return; }
     ws.send(JSON.stringify({
       setup: {
-        model: 'models/gemini-2.0-flash-live-001',
+        model: 'models/gemini-3.1-flash-live-preview',
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: agent.geminiVoice || 'Charon' } }
-          }
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: agent.geminiVoice || 'Puck' } }
+          },
+          temperature: 1.0,
         },
         outputAudioTranscription: {},
         inputAudioTranscription: {},
