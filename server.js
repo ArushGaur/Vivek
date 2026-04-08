@@ -10,6 +10,8 @@ const express    = require('express');
 const cors       = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const { createClient } = require('@libsql/client');
+const { createServer } = require('http');
+const { WebSocketServer, WebSocket } = require('ws');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -189,7 +191,6 @@ app.post('/api/sessions/:sessionId/messages', async (req, res) => {
       sql: 'INSERT INTO messages (id, session_id, role, content, timestamp) VALUES (?,?,?,?,?)',
       args: [id, sessionId, role, content, now],
     });
-    // Update session updated_at
     await db.execute({
       sql: 'UPDATE sessions SET updated_at = ? WHERE id = ?',
       args: [now, sessionId],
@@ -261,10 +262,52 @@ app.get('/api/stats', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────
+//  WEBSOCKET PROXY — forwards browser <-> Gemini Live
+// ─────────────────────────────────────────────────────
+const httpServer = createServer(app);
+const wss = new WebSocketServer({ server: httpServer, path: '/gemini-proxy' });
+
+wss.on('connection', function(clientWs) {
+  console.log('[VIVEK] WebSocket client connected');
+  const geminiUrl = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.BidiGenerateContent?key=' + process.env.GEMINI_API_KEY;
+  const geminiWs = new WebSocket(geminiUrl);
+
+  geminiWs.on('open', () => {
+    console.log('[VIVEK] Gemini WebSocket connected');
+    clientWs.on('message', (msg) => {
+      if (geminiWs.readyState === WebSocket.OPEN) geminiWs.send(msg);
+    });
+  });
+
+  geminiWs.on('message', (msg) => {
+    if (clientWs.readyState === WebSocket.OPEN) clientWs.send(msg);
+  });
+
+  geminiWs.on('close', () => {
+    console.log('[VIVEK] Gemini WebSocket closed');
+    if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+  });
+
+  geminiWs.on('error', (err) => {
+    console.error('[VIVEK] Gemini WebSocket error:', err.message);
+    if (clientWs.readyState === WebSocket.OPEN) clientWs.close();
+  });
+
+  clientWs.on('close', () => {
+    if (geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+  });
+
+  clientWs.on('error', (err) => {
+    console.error('[VIVEK] Client WebSocket error:', err.message);
+    if (geminiWs.readyState === WebSocket.OPEN) geminiWs.close();
+  });
+});
+
+// ─────────────────────────────────────────────────────
 //  START SERVER
 // ─────────────────────────────────────────────────────
 initDB().then(() => {
-  app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
     console.log(`[VIVEK] Neural Core backend running on port ${PORT}`);
     console.log(`[VIVEK] Turso DB: ${process.env.TURSO_DATABASE_URL ? 'CONNECTED' : 'NOT CONFIGURED'}`);
     console.log(`[VIVEK] Gemini Key: ${process.env.GEMINI_API_KEY ? 'SET ✓' : 'MISSING ✗'}`);
