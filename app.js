@@ -56,7 +56,7 @@ const AGENTS = {
     label: 'V.I.V.E.K',
     gender: 'male',
     color: 'orange',
-    geminiVoice: 'Charon',
+    geminiVoice: 'Fenrir',
     wakeWord: /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/i,
     greeting: "Vivek online, Sir. How may I assist you today?",
     /* 
@@ -1228,7 +1228,7 @@ async function startGeminiSession(initialText) {
     if (liveWs !== ws) { ws.close(); return; }
     ws.send(JSON.stringify({
       setup: {
-        model: 'models/gemini-3.1-flash-live-preview',
+        model: 'models/gemini-2.0-flash-live-001',
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: {
@@ -1297,10 +1297,16 @@ async function startGeminiSession(initialText) {
 
         // Check for agent switch command during active session
         if (/\b(switch to priya|call priya|activate priya|female agent)\b/.test(t)) {
-          switchAgent('priya'); return;
+          switchAgent('priya');
+          closeLiveSession();
+          setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
+          return;
         }
-        if (/\b(switch to vivek|back to vivek|male agent|switch back)\b/.test(t) && activeAgent !== 'vivek') {
-          switchAgent('vivek'); return;
+        if (/\b(switch to vivek|back to vivek|male agent|switch back|call vivek|activate vivek)\b/.test(t) && activeAgent !== 'vivek') {
+          switchAgent('vivek');
+          closeLiveSession();
+          setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
+          return;
         }
 
         // Color change
