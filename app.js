@@ -1234,19 +1234,9 @@ async function startGeminiSession(initialText) {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: agent.geminiVoice || 'Puck' } }
           },
-          temperature: 1.0,
         },
         outputAudioTranscription: {},
         inputAudioTranscription: {},
-        realtimeInputConfig: {
-          automaticActivityDetection: {
-            disabled: false,
-            startOfSpeechSensitivity: 'START_SENSITIVITY_LOW',
-            endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
-            prefixPaddingMs: 20,
-            silenceDurationMs: 500
-          }
-        },
         systemInstruction: { parts: [{ text: systemPrompt }] }
       }
     }));
@@ -1369,7 +1359,7 @@ async function startGeminiSession(initialText) {
 function sendTextTurn(text) {
   if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
   liveWs.send(JSON.stringify({
-    clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true }
+    realtimeInput: { text }
   }));
   setOrbMode('thinking'); isThinking = true; isListening = false;
   const txEl = document.getElementById('transcript-text');
