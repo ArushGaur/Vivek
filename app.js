@@ -1332,7 +1332,7 @@ async function startGeminiSession(initialText) {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         setup: {
-          model: 'models/gemini-2.0-flash-live-001',
+          model: 'models/gemini-2.0-flash-exp',
           generationConfig: { responseModalities: ['AUDIO', 'TEXT'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: p.geminiVoice || 'Charon' } } } },
           systemInstruction: { parts: [{ text: p.prompt }] }
         }
