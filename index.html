@@ -18,7 +18,7 @@
     <div class="bl" id="bl2">▸ GEMINI LIVE PROTOCOL LOADED</div>
     <div class="bl" id="bl3">▸ VOICE ENGINE CALIBRATED</div>
     <div class="bl" id="bl4">▸ PERSONALITY CORES READY</div>
-    <div class="bl" id="bl5">▸ SPHERE PARTICLES ARMED</div>
+    <div class="bl" id="bl5">▸ HOLOGRAPHIC SPHERE ARMED</div>
   </div>
   <div id="boot-bar-wrap"><div id="boot-bar"></div></div>
   <div id="boot-pct">0%</div>
@@ -40,6 +40,15 @@
 
 <!-- STOP BUTTON -->
 <button id="stop-btn" onclick="stopSpeaking()">■ STOP</button>
+
+<!-- HISTORY PANEL -->
+<div id="history-panel">
+  <div id="history-toggle" onclick="toggleHistory()">◈ HISTORY</div>
+  <div id="history-body">
+    <div id="history-list"><div class="h-empty">No sessions yet.</div></div>
+    <button id="history-refresh" onclick="loadHistory()">↻ REFRESH</button>
+  </div>
+</div>
 
 <!-- TOAST NOTIFICATION -->
 <div id="toast"></div>
