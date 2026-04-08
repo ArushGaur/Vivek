@@ -1335,9 +1335,9 @@ async function startGeminiSession(initialText) {
           model: 'models/gemini-3.1-flash-live-preview',
           generationConfig: {
             responseModalities: ['AUDIO'],
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: p.geminiVoice || 'Charon' } } },
-            outputAudioTranscription: {}
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: p.geminiVoice || 'Charon' } } }
           },
+          outputAudioTranscription: {},
           systemInstruction: { parts: [{ text: p.prompt }] }
         }
       }));
