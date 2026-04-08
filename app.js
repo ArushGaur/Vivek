@@ -4,7 +4,7 @@
 ═══════════════════════════════════════════════════════ */
 'use strict';
 
-const BACKEND_URL = 'https://vivek-backend.onrender.com';
+const BACKEND_URL = 'https://vivek-qqwu.onrender.com';
 
 let apiKey       = '';
 let messages     = [];
