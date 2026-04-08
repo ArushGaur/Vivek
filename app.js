@@ -1317,7 +1317,7 @@ async function startGeminiSession(initialText) {
   const txEl = document.getElementById('transcript-text');
   txEl.textContent = 'Connecting to Gemini Live…'; txEl.classList.add('active');
   setOrbMode('thinking');
-  const url = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.BidiGenerateContent?key=' + apiKey;
+  const url = 'wss://vivek-qqwu.onrender.com/gemini-proxy';
   try { liveWs = new WebSocket(url); } catch(e) {
     txEl.textContent = 'WebSocket failed: ' + e.message;
     closeLiveSession(); scheduleWakeRestart(2000); return;
