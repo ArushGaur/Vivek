@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>V.I.V.E.K</title>
+<title>V.I.V.E.K — Dual Agent Neural Interface</title>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -15,10 +15,10 @@
   <div id="boot-sub">NEURAL CORE INITIALIZING</div>
   <div id="boot-lines">
     <div class="bl" id="bl1">▸ QUANTUM MATRIX ONLINE</div>
-    <div class="bl" id="bl2">▸ GEMINI LIVE PROTOCOL LOADED</div>
-    <div class="bl" id="bl3">▸ VOICE ENGINE CALIBRATED</div>
-    <div class="bl" id="bl4">▸ PERSONALITY CORES READY</div>
-    <div class="bl" id="bl5">▸ HOLOGRAPHIC SPHERE ARMED</div>
+    <div class="bl" id="bl2">▸ DUAL AGENT CORES LOADED — V.I.V.E.K + P.R.I.Y.A</div>
+    <div class="bl" id="bl3">▸ INDIAN ACCENT ENGINE CALIBRATED</div>
+    <div class="bl" id="bl4">▸ INSTRUCTION MEMORY SYSTEM READY</div>
+    <div class="bl" id="bl5">▸ GEMINI RESEARCH BRIDGE ARMED</div>
   </div>
   <div id="boot-bar-wrap"><div id="boot-bar"></div></div>
   <div id="boot-pct">0%</div>
@@ -29,6 +29,15 @@
 
 <!-- VIVEK LABEL -->
 <div id="jarvis-label">V.I.V.E.K</div>
+
+<!-- AGENT INDICATOR -->
+<div id="agent-indicator">
+  <span id="agent-gender-icon">♂ V.I.V.E.K</span>
+  <button id="agent-switch-btn" onclick="switchAgentToggle()" title="Switch Agent (P key)">⇄ SWITCH</button>
+</div>
+
+<!-- AGENT LABEL (hidden, used for JS reference) -->
+<span id="agent-label" style="display:none">V.I.V.E.K</span>
 
 <!-- STATE LABEL -->
 <div id="state-label">IDLE</div>
@@ -50,9 +59,50 @@
   </div>
 </div>
 
+<!-- INSTRUCTIONS PANEL -->
+<div id="instructions-panel">
+  <div id="instructions-toggle" onclick="toggleInstructions()">◈ LEARNED</div>
+  <div id="instructions-body">
+    <div id="instructions-list"></div>
+    <button id="instructions-clear" onclick="clearInstructions()">✕ CLEAR ALL</button>
+  </div>
+</div>
+
 <!-- TOAST NOTIFICATION -->
 <div id="toast"></div>
 
+<script>
+function switchAgentToggle() {
+  if (typeof activeAgent !== 'undefined') {
+    if (activeAgent === 'vivek') switchAgent('priya');
+    else switchAgent('vivek');
+  }
+}
+function toggleInstructions() {
+  const body = document.getElementById('instructions-body');
+  const isOpen = body.classList.toggle('open');
+  if (isOpen) refreshInstructionsUI();
+}
+function refreshInstructionsUI() {
+  const list = document.getElementById('instructions-list');
+  if (typeof learnedInstructions === 'undefined' || learnedInstructions.length === 0) {
+    list.innerHTML = '<div class="h-empty">No instructions yet. Give me commands like "always keep responses short" or "from now on speak more casually".</div>';
+    return;
+  }
+  list.innerHTML = learnedInstructions.map((inst, i) => 
+    `<div class="h-session"><div class="h-session-id">RULE ${i+1}</div><div class="h-session-preview">${inst.slice(0,80)}</div></div>`
+  ).join('');
+}
+function clearInstructions() {
+  if (typeof learnedInstructions !== 'undefined') {
+    learnedInstructions = [];
+    try { localStorage.removeItem('vivek_instructions'); } catch(e){}
+    fetch('https://vivek-qqwu.onrender.com/api/instructions', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({instructions:[]}) }).catch(()=>{});
+    refreshInstructionsUI();
+    showToast('INSTRUCTIONS CLEARED');
+  }
+}
+</script>
 <script src="app.js"></script>
 </body>
 </html>
