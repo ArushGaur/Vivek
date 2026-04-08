@@ -1199,7 +1199,7 @@ async function startMicCapture() {
       const resampled = resampleTo16k(raw, nativeSR);
       liveWs.send(JSON.stringify({
         realtimeInput: {
-          mediaChunks: [{ data: int16ToBase64(resampled), mimeType: 'audio/pcm;rate=16000' }]
+          audio: { data: int16ToBase64(resampled), mimeType: 'audio/pcm;rate=16000' }
         }
       }));
       var rms = 0;
@@ -1338,6 +1338,15 @@ async function startGeminiSession(initialText) {
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: p.geminiVoice || 'Charon' } } }
           },
           outputAudioTranscription: {},
+          realtimeInputConfig: {
+            automaticActivityDetection: {
+              disabled: false,
+              startOfSpeechSensitivity: 'START_SENSITIVITY_LOW',
+              endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
+              prefixPaddingMs: 20,
+              silenceDurationMs: 500
+            }
+          },
           systemInstruction: { parts: [{ text: p.prompt }] }
         }
       }));
