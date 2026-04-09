@@ -18,6 +18,24 @@ const BACKEND_URL = 'https://vivek-qqwu.onrender.com';
 let activeAgent = 'vivek';  // default: male
 let learnedInstructions = []; // persisted instructions boss gave
 let messages = [];
+
+/* ─────────────────────────────────────────────────────
+   COMMAND SYSTEM
+   These are silent commands — agent executes them but
+   must NOT speak a verbal response. Gemini never sees them.
+───────────────────────────────────────────────────── */
+const COMMANDS = {
+  STOP:        text => /\b(stop|stop it|stop karo|ruko|ruk jao|bas|bus|chup|chup ho jao|chup karo|band karo|band kar do|rukiye|rok do|ruk|khamosh|khamosh ho jao|mat bolo)\b/.test(text),
+  SWITCH_VIVEK: text => /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/.test(text),
+  SWITCH_PRIYA: text => /\b(priya|prya|preya|priyaa)\b/.test(text),
+};
+
+function detectCommand(normalizedText) {
+  if (COMMANDS.STOP(normalizedText))        return 'STOP';
+  if (COMMANDS.SWITCH_PRIYA(normalizedText)) return 'SWITCH_PRIYA';
+  if (COMMANDS.SWITCH_VIVEK(normalizedText)) return 'SWITCH_VIVEK';
+  return null;
+}
 let isThinking = false;
 let isListening = false;
 let isSpeaking = false;
@@ -1168,13 +1186,24 @@ function stopCurrentResponseOnly() {
 }
 
 async function saveMessage(role, content) {
-  if (!currentSessionId) return;
+  if (!currentSessionId) {
+    console.warn('[VIVEK] saveMessage: no session ID, message not saved:', role, content.slice(0,40));
+    return;
+  }
   try {
-    await fetch(`${BACKEND_URL}/api/sessions/${currentSessionId}/messages`, {
+    const res = await fetch(`${BACKEND_URL}/api/sessions/${currentSessionId}/messages`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ role, content }),
     });
-  } catch(err) {}
+    if (!res.ok) {
+      const err = await res.text();
+      console.warn('[VIVEK] saveMessage failed:', res.status, err);
+    } else {
+      console.log('[VIVEK] Saved message:', role, content.slice(0, 50));
+    }
+  } catch(err) {
+    console.warn('[VIVEK] saveMessage network error:', err.message);
+  }
 }
 
 async function loadHistory() {
@@ -1459,12 +1488,10 @@ async function startGeminiSession(initialText) {
       }
 
       if (sc.outputAudioTranscription && sc.outputAudioTranscription.text) {
-        if (suppressModelAudioUntilTurnComplete) {
-          // Ignore remaining model output after an explicit stop command.
-        } else {
-        assistantBuffer += sc.outputAudioTranscription.text;
-        txEl.textContent = assistantBuffer.length > 120 ? assistantBuffer.slice(0, 120) + '…' : assistantBuffer;
-        txEl.classList.add('active');
+        if (!suppressModelAudioUntilTurnComplete) {
+          assistantBuffer += sc.outputAudioTranscription.text;
+          txEl.textContent = assistantBuffer.length > 120 ? assistantBuffer.slice(0, 120) + '…' : assistantBuffer;
+          txEl.classList.add('active');
         }
       }
 
@@ -1473,28 +1500,43 @@ async function startGeminiSession(initialText) {
         const userSaid = sc.inputAudioTranscription.text.trim();
         const normalized = normalizeSpeechText(userSaid);
         if (!normalized) return;
-        saveUserSpeechText(userSaid);
 
-        if (isStopCommand(normalized)) {
-          if (isSpeaking || isThinking) stopCurrentResponseOnly();
-          return;
+        // ── COMMAND DETECTION (silent — never saved to DB, never sent to Gemini) ──
+        const cmd = detectCommand(normalized);
+
+        if (cmd === 'STOP') {
+          // Immediately cut audio and suppress the rest of this turn
+          stopCurrentResponseOnly();
+          // Send an interrupt signal to Gemini so it stops generating
+          if (liveWs && liveWs.readyState === WebSocket.OPEN) {
+            try {
+              liveWs.send(JSON.stringify({ clientContent: { turns: [], turnComplete: true } }));
+            } catch(e) {}
+          }
+          return; // DO NOT save to DB, DO NOT let Gemini respond
         }
 
-        // Check for agent switch command during active session
-        if (isSwitchToPriya(normalized) && activeAgent !== 'priya') {
+        if (cmd === 'SWITCH_PRIYA' && activeAgent !== 'priya') {
+          // Silent switch — stop current response, switch agent, restart session
+          stopCurrentResponseOnly();
           switchAgent('priya');
           closeLiveSession();
           setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
-          return;
+          return; // DO NOT save to DB, DO NOT let Gemini respond
         }
-        if (isSwitchToVivek(normalized) && activeAgent !== 'vivek') {
+
+        if (cmd === 'SWITCH_VIVEK' && activeAgent !== 'vivek') {
+          stopCurrentResponseOnly();
           switchAgent('vivek');
           closeLiveSession();
           setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
-          return;
+          return; // DO NOT save to DB, DO NOT let Gemini respond
         }
 
-        // Color change
+        // ── Normal utterance — save to DB ──
+        saveUserSpeechText(userSaid);
+
+        // Color change (non-command, agent can respond)
         const colorWords = normalized.split(/\s+/);
         if (/\b(color|colour|orb|change|make|set)\b/.test(normalized)) {
           for (const w of colorWords) { if (COLOR_MAP[w]) { setColor(COLOR_MAP[w]); break; } }
@@ -1643,9 +1685,39 @@ function runBoot() {
           const txEl = document.getElementById('transcript-text');
           const loaded = await fetchApiKey();
           if (loaded) {
-            txEl.textContent = 'Listening…';
+            txEl.textContent = 'Tap anywhere or press any key to activate…';
             txEl.classList.add('active');
-            setTimeout(() => startGeminiSession(null), 900);
+            // Auto-activate on first user gesture (browser AudioContext policy)
+            function autoActivate() {
+              document.removeEventListener('click', autoActivate);
+              document.removeEventListener('keydown', autoActivate);
+              document.removeEventListener('touchstart', autoActivate);
+              if (isDormant && apiKey) {
+                connectFails = 0;
+                ensureAudioCtx();
+                startGeminiSession(null);
+              }
+            }
+            document.addEventListener('click', autoActivate);
+            document.addEventListener('keydown', autoActivate);
+            document.addEventListener('touchstart', autoActivate);
+            // On desktop browsers that allow autoplay after page interaction,
+            // try to start automatically after a short delay
+            setTimeout(() => {
+              if (isDormant && apiKey) {
+                try {
+                  ensureAudioCtx();
+                  // Only auto-start if AudioContext is already running (no gesture needed)
+                  if (audioCtx && audioCtx.state === 'running') {
+                    document.removeEventListener('click', autoActivate);
+                    document.removeEventListener('keydown', autoActivate);
+                    document.removeEventListener('touchstart', autoActivate);
+                    connectFails = 0;
+                    startGeminiSession(null);
+                  }
+                } catch(e) {}
+              }
+            }, 1200);
           } else {
             txEl.textContent = 'Backend offline. Check BACKEND_URL in app.js.'; txEl.classList.add('active');
           }
@@ -1666,9 +1738,9 @@ runBoot();
 canvas.addEventListener('click', function() {
   ensureAudioCtx();
   if (isSpeaking || isListening || isThinking) stopAll();
-  else if (isDormant && apiKey) { 
-    connectFails = 0;  // always reset on manual click so user can retry after failures
-    startGeminiSession(null); 
+  else if (isDormant && apiKey) {
+    connectFails = 0;
+    startGeminiSession(null);
   }
   else if (!apiKey) showToast('BACKEND NOT CONNECTED');
 });
