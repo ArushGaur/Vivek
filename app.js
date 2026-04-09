@@ -1098,9 +1098,13 @@ async function loadSessionMessages(sessionId) {
     const res = await fetch(`${BACKEND_URL}/api/sessions/${sessionId}/messages`);
     const data = await res.json();
     if (data.messages && data.messages.length > 0) {
-      // Restore to messages array — keep last 40 messages for context window
+      // Restore last 40 messages for Gemini context
       messages = data.messages.slice(-40).map(m => ({ role: m.role, content: m.content }));
+      console.log(`[VIVEK] Restored ${messages.length} messages from session ${sessionId}`);
       showToast(`MEMORY RESTORED — ${messages.length} msgs`);
+    } else {
+      messages = [];
+      console.log(`[VIVEK] Session ${sessionId} has no messages yet (fresh start)`);
     }
   } catch(err) {
     console.warn('[VIVEK] loadSessionMessages error:', err.message);
@@ -1527,27 +1531,45 @@ async function startGeminiSession(initialText) {
     }
   };
 
-  ws.onerror = function() {
+  ws.onerror = function(err) {
     clearTimeout(connTimeout);
-    document.getElementById('transcript-text').textContent = 'Connection error.';
+    connectFails++;
+    console.error('[VIVEK] WebSocket error (fail #' + connectFails + '):', err);
+    document.getElementById('transcript-text').textContent = 'Connection error — retrying…';
     document.getElementById('transcript-text').classList.add('active');
     closeLiveSession(); setOrbMode('idle');
-    if (apiKey) setTimeout(() => startGeminiSession(null), 3000);
+    if (apiKey && connectFails < MAX_FAILS) setTimeout(() => startGeminiSession(null), 3000);
+    else if (connectFails >= MAX_FAILS) {
+      document.getElementById('transcript-text').textContent = `❌ Gemini connection failed ${connectFails} times. Check GEMINI_API_KEY on server.`;
+    }
   };
 
-  ws.onclose = function() {
-    clearTimeout(connTimeout); sessionReady = false; stopMicCapture();
+  ws.onclose = function(event) {
+    clearTimeout(connTimeout);
+    const wasReady = sessionReady;
+    sessionReady = false; stopMicCapture();
     if (restartAfterClosePending) return;
     if (!isDormant && apiKey) {
       isDormant = true; setOrbMode('idle');
-      connectFails++;
-      if (connectFails >= MAX_FAILS) {
-        const txEl = document.getElementById('transcript-text');
-        txEl.textContent = `❌ Gemini connection failed ${connectFails} times. Check GEMINI_API_KEY on server.`;
-        txEl.classList.add('active');
-        return;
+      // Only count as a real failure if Gemini closed BEFORE setup completed
+      // (i.e. auth error, bad key, network issue). Normal session ends after
+      // setup completes and are NOT failures — just reconnect silently.
+      if (!wasReady) {
+        connectFails++;
+        console.warn(`[VIVEK] Connection closed before ready (fail #${connectFails}), code:`, event.code);
+        if (connectFails >= MAX_FAILS) {
+          const txEl = document.getElementById('transcript-text');
+          txEl.textContent = `❌ Gemini connection failed ${connectFails} times. Check GEMINI_API_KEY on server.`;
+          txEl.classList.add('active');
+          return;
+        }
+        // Back off longer on repeated pre-setup failures
+        setTimeout(() => startGeminiSession(null), 1500 * connectFails);
+      } else {
+        // Normal close after a successful session — reconnect quietly
+        connectFails = 0;
+        setTimeout(() => startGeminiSession(null), 800);
       }
-      setTimeout(() => startGeminiSession(null), 800);
     }
   };
 }
@@ -1644,7 +1666,10 @@ runBoot();
 canvas.addEventListener('click', function() {
   ensureAudioCtx();
   if (isSpeaking || isListening || isThinking) stopAll();
-  else if (isDormant && apiKey) { connectFails = 0; startGeminiSession(null); }
+  else if (isDormant && apiKey) { 
+    connectFails = 0;  // always reset on manual click so user can retry after failures
+    startGeminiSession(null); 
+  }
   else if (!apiKey) showToast('BACKEND NOT CONNECTED');
 });
 
