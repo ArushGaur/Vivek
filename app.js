@@ -218,11 +218,16 @@ function switchAgent(agentKey) {
   if ((wasLive || wasBusy) && apiKey) {
     currentSessionId = null;
     currentSessionAgent = null;
+    // Set this BEFORE closeLiveSession() so ws.onclose doesn't spawn a
+    // competing reconnect loop that races with our setTimeout below.
+    restartAfterClosePending = true;
     closeLiveSession();
     setTimeout(() => {
+      restartAfterClosePending = false;
+      restartAfterCloseText = null;
       connectFails = 0;
       startGeminiSession(null);
-    }, 220);
+    }, 300);
   }
 }
 
@@ -1177,6 +1182,9 @@ function stopCurrentResponseOnly() {
   }
   suppressModelAudioUntilTurnComplete = true;
   stopGeminiPlayback();
+  // Reset play cursor so any chunks that arrive before suppressModelAudioUntilTurnComplete
+  // takes effect don't queue up behind the old nextPlayTime.
+  if (audioCtx) nextPlayTime = audioCtx.currentTime;
   isThinking = false;
   isListening = true;
   setOrbMode('listening');
@@ -1516,31 +1524,40 @@ async function startGeminiSession(initialText) {
         const cmd = detectCommand(normalized);
 
         if (cmd === 'STOP') {
-          // Immediately cut audio and suppress the rest of this turn
+          // Cut audio immediately on the client side.
+          // Do NOT send anything to Gemini — sending clientContent with empty turns
+          // actually triggers a new Gemini response. Instead, just suppress locally.
           stopCurrentResponseOnly();
-          // Send an interrupt signal to Gemini so it stops generating
-          if (liveWs && liveWs.readyState === WebSocket.OPEN) {
-            try {
-              liveWs.send(JSON.stringify({ clientContent: { turns: [], turnComplete: true } }));
-            } catch(e) {}
-          }
           return; // DO NOT save to DB, DO NOT let Gemini respond
         }
 
         if (cmd === 'SWITCH_PRIYA' && activeAgent !== 'priya') {
-          // Silent switch — stop current response, switch agent, restart session
+          // Set restartAfterClosePending BEFORE closeLiveSession so ws.onclose
+          // doesn't spawn a competing reconnect loop that races with our setTimeout.
           stopCurrentResponseOnly();
+          restartAfterClosePending = true;
           switchAgent('priya');
           closeLiveSession();
-          setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
+          setTimeout(() => {
+            restartAfterClosePending = false;
+            restartAfterCloseText = null;
+            connectFails = 0;
+            startGeminiSession(null);
+          }, 400);
           return; // DO NOT save to DB, DO NOT let Gemini respond
         }
 
         if (cmd === 'SWITCH_VIVEK' && activeAgent !== 'vivek') {
           stopCurrentResponseOnly();
+          restartAfterClosePending = true;
           switchAgent('vivek');
           closeLiveSession();
-          setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
+          setTimeout(() => {
+            restartAfterClosePending = false;
+            restartAfterCloseText = null;
+            connectFails = 0;
+            startGeminiSession(null);
+          }, 400);
           return; // DO NOT save to DB, DO NOT let Gemini respond
         }
 
@@ -1668,11 +1685,9 @@ var bootLines = ['bl1','bl2','bl3','bl4','bl5'];
 var bootIdx = 0, bootPct = 0;
 
 // Tracks whether the user has given the first gesture (needed for AudioContext + mic)
-let gestureUnlocked = false;
+let gestureUnlocked = true;
 
 async function unlockAndStart() {
-  if (gestureUnlocked) return;
-  gestureUnlocked = true;
 
   // This runs inside a user gesture — safe to unlock AudioContext and request mic
   try {
@@ -1733,61 +1748,11 @@ function runBoot() {
           return;
         }
 
-        // Replace boot bar area with a single ACTIVATE button
-        // This button IS the user gesture — clicking it unlocks AudioContext + mic
-        const activateBtn = document.createElement('button');
-        activateBtn.id = 'activate-btn';
-        activateBtn.textContent = '⬡  ACTIVATE  ⬡';
-        activateBtn.style.cssText = [
-          'margin-top:32px',
-          'padding:14px 48px',
-          'background:transparent',
-          'border:2px solid rgba(255,154,0,0.8)',
-          'color:#ff9a00',
-          'font-family:inherit',
-          'font-size:15px',
-          'letter-spacing:4px',
-          'cursor:pointer',
-          'border-radius:4px',
-          'transition:all 0.2s',
-          'text-transform:uppercase',
-          'box-shadow:0 0 24px rgba(255,154,0,0.3)',
-          'animation:pulse-btn 1.5s ease-in-out infinite',
-        ].join(';');
-
-        // Add pulse animation
-        if (!document.getElementById('activate-btn-style')) {
-          const style = document.createElement('style');
-          style.id = 'activate-btn-style';
-          style.textContent = '@keyframes pulse-btn { 0%,100%{box-shadow:0 0 20px rgba(255,154,0,0.3)} 50%{box-shadow:0 0 40px rgba(255,154,0,0.7)} }';
-          document.head.appendChild(style);
-        }
-
-        // Hide the boot bar, show the button
-        const barWrap = document.getElementById('boot-bar-wrap') || bar.parentElement;
-        if (barWrap) barWrap.style.display = 'none';
-        overlay.appendChild(activateBtn);
-
-        activateBtn.addEventListener('click', async function() {
-          activateBtn.textContent = 'INITIALIZING…';
-          activateBtn.disabled = true;
-          // Fade out the overlay
-          overlay.style.transition = 'opacity 0.6s';
-          overlay.style.opacity = '0';
-          setTimeout(() => { overlay.style.display = 'none'; }, 650);
-          await unlockAndStart();
-        });
-
-        // Also allow keyboard activation (space/enter)
-        document.addEventListener('keydown', async function onKey(e) {
-          if (e.code === 'Space' || e.code === 'Enter') {
-            document.removeEventListener('keydown', onKey);
-            overlay.style.transition = 'opacity 0.6s';
-            overlay.style.opacity = '0';
-            setTimeout(() => { overlay.style.display = 'none'; }, 650);
-            await unlockAndStart();
-          }
-        });
+        // Auto-start: fade out boot overlay and begin immediately
+        overlay.style.transition = 'opacity 0.6s';
+        overlay.style.opacity = '0';
+        setTimeout(() => { overlay.style.display = 'none'; }, 650);
+        await unlockAndStart();
 
       }, 280);
     }
@@ -1803,7 +1768,6 @@ requestAnimationFrame(drawJarvisInterface);
 runBoot();
 
 canvas.addEventListener('click', function() {
-  if (!gestureUnlocked) return; // gesture not yet given — boot button handles first click
   ensureAudioCtx();
   if (isSpeaking || isListening || isThinking) stopAll();
   else if (isDormant && apiKey) {
