@@ -23,11 +23,16 @@ let isListening = false;
 let isSpeaking = false;
 let isDormant = true;
 let currentSessionId = null;
+let currentSessionAgent = null;
 let apiKey = '';
 let restartAfterCloseText = null;
 let restartAfterClosePending = false;
 let speakingStartedAt = 0;
 let lastBargeInAt = 0;
+let suppressModelAudioUntilTurnComplete = false;
+let assistantBuffer = '';
+let lastSavedUserText = '';
+let lastSavedAssistantText = '';
 
 let liveWs = null;
 let sessionReady = false;
@@ -82,6 +87,7 @@ HOW TO RESPOND:
 - If Boss asks something conversational (greetings, opinions, commands, casual chat) → respond directly from your own persona. Do NOT mention Gemini or searching.
 - If Boss asks for facts, science, news, calculations, definitions, current data → research it internally and deliver the answer in YOUR voice and style. Say things like "Sir, the photoelectric effect works like this..." — never say "According to my search..." or "Gemini says...". You found the information and you are delivering it to Boss.
 - ALWAYS rephrase answers in your own personality. Never give a dry textbook answer. Add a sentence of context, or a slight personal touch.
+- If Boss asks your name (for example: "what is your name?") answer clearly and consistently: "My name is V.I.V.E.K." You may add one short follow-up line, but never change this name.
 
 LANGUAGE: Speak in natural Hinglish, similar to how an educated Indian professional speaks. Mix Hindi and English fluidly and confidently. Keep the tone crisp and practical.
 Examples:
@@ -123,6 +129,7 @@ HOW TO RESPOND:
 - For factual/research questions: research internally and deliver in YOUR voice — never mention "searching" or "Gemini says". Say "Sir, maine check kiya — here's what I found..." and then give the answer in your style.
 - Always rephrase raw data into your natural Hinglish personality.
 - Mix Hindi and English naturally — not forced, just how an educated Indian woman speaks.
+- If Boss asks your name (for example: "what is your name?") answer clearly and consistently: "My name is P.R.I.Y.A." You may add one short follow-up line, but never change this name.
 
 LANGUAGE EXAMPLES:
 - "Sir, bilkul sahi kaha aapne — let me explain this better."
@@ -186,6 +193,8 @@ function switchAgent(agentKey) {
 
   // Apply new persona immediately by rebuilding the live session.
   if ((wasLive || wasBusy) && apiKey) {
+    currentSessionId = null;
+    currentSessionAgent = null;
     closeLiveSession();
     setTimeout(() => {
       connectFails = 0;
@@ -1049,6 +1058,7 @@ async function fetchApiKey() {
 }
 
 async function createSession() {
+  if (currentSessionId && currentSessionAgent === activeAgent) return;
   try {
     const res = await fetch(`${BACKEND_URL}/api/sessions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1056,7 +1066,61 @@ async function createSession() {
     });
     const data = await res.json();
     currentSessionId = data.sessionId;
+    currentSessionAgent = activeAgent;
   } catch(err) { currentSessionId = null; }
+}
+
+function normalizeSpeechText(text) {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[.,!?]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function saveUserSpeechText(text) {
+  const clean = (text || '').trim();
+  if (clean.length < 2) return;
+  if (clean === lastSavedUserText) return;
+  lastSavedUserText = clean;
+  saveMessage('user', clean);
+}
+
+function saveAssistantSpeechText(text) {
+  const clean = (text || '').trim();
+  if (clean.length < 2) return;
+  if (clean === lastSavedAssistantText) return;
+  lastSavedAssistantText = clean;
+  saveMessage('assistant', clean);
+}
+
+function isStopCommand(normalizedText) {
+  return /\b(stop|stop it|stop karo|ruko|ruk jao|ruko|bas|bus|chup|chup ho jao|band karo|band kar do|rukiye)\b/.test(normalizedText);
+}
+
+function isSwitchToVivek(normalizedText) {
+  return /^(vivek)$/.test(normalizedText)
+    || /\b(switch to vivek|back to vivek|call vivek|activate vivek|male agent)\b/.test(normalizedText);
+}
+
+function isSwitchToPriya(normalizedText) {
+  return /^(priya)$/.test(normalizedText)
+    || /\b(switch to priya|call priya|activate priya|female agent)\b/.test(normalizedText);
+}
+
+function stopCurrentResponseOnly() {
+  if (assistantBuffer) {
+    saveAssistantSpeechText(assistantBuffer);
+    assistantBuffer = '';
+  }
+  suppressModelAudioUntilTurnComplete = true;
+  stopGeminiPlayback();
+  isThinking = false;
+  isListening = true;
+  setOrbMode('listening');
+  const txEl = document.getElementById('transcript-text');
+  txEl.textContent = 'Listening…';
+  txEl.classList.add('active');
 }
 
 async function saveMessage(role, content) {
@@ -1135,14 +1199,6 @@ async function startMicCapture() {
       for (let i = 0; i < raw.length; i++) rms += raw[i] * raw[i];
       rms = Math.sqrt(rms / raw.length);
       ORB.listenAmp = Math.min(1, rms * 10);
-
-      // Hard barge-in: stop agent as soon as user starts speaking.
-      const now = performance.now();
-      if (isSpeaking && now - speakingStartedAt > 600 && now - lastBargeInAt > 1200 && rms > 0.05) {
-        lastBargeInAt = now;
-        interruptAndStartNewTurn('');
-        return;
-      }
 
       if (!sessionReady || !liveWs || liveWs.readyState !== WebSocket.OPEN || !isListening) return;
       const resampled = resampleTo16k(raw, nativeSR);
@@ -1274,6 +1330,8 @@ async function startGeminiSession(initialText) {
   if (liveWs && liveWs.readyState === WebSocket.OPEN) liveWs.close();
   isDormant = false; sessionReady = false; isListening = true;
   isThinking = false; isSpeaking = false; nextPlayTime = 0;
+  suppressModelAudioUntilTurnComplete = false;
+  assistantBuffer = '';
   await createSession();
 
   const agent = AGENTS[activeAgent];
@@ -1316,7 +1374,6 @@ async function startGeminiSession(initialText) {
     }));
   };
 
-  let assistantBuffer = '';
   ws.onmessage = async function(event) {
     if (liveWs !== ws) return;
     let data;
@@ -1338,6 +1395,7 @@ async function startGeminiSession(initialText) {
       if (sc.modelTurn && sc.modelTurn.parts) {
         for (const part of sc.modelTurn.parts) {
           if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.indexOf('audio') !== -1) {
+            if (suppressModelAudioUntilTurnComplete) continue;
             if (!isSpeaking) {
               isSpeaking = true;
               speakingStartedAt = performance.now();
@@ -1348,6 +1406,7 @@ async function startGeminiSession(initialText) {
             playGeminiChunk(part.inlineData.data);
           }
           if (part.text) {
+            if (suppressModelAudioUntilTurnComplete) continue;
             assistantBuffer += part.text;
             txEl.textContent = assistantBuffer.length > 120 ? assistantBuffer.slice(0, 120) + '…' : assistantBuffer;
             txEl.classList.add('active');
@@ -1356,29 +1415,39 @@ async function startGeminiSession(initialText) {
       }
 
       if (sc.outputAudioTranscription && sc.outputAudioTranscription.text) {
+        if (suppressModelAudioUntilTurnComplete) {
+          // Ignore remaining model output after an explicit stop command.
+        } else {
         assistantBuffer += sc.outputAudioTranscription.text;
         txEl.textContent = assistantBuffer.length > 120 ? assistantBuffer.slice(0, 120) + '…' : assistantBuffer;
         txEl.classList.add('active');
+        }
       }
 
       // User speech transcription — detect commands and instruction learning
       if (sc.inputAudioTranscription && sc.inputAudioTranscription.text) {
-        const userSaid = sc.inputAudioTranscription.text;
-        const t = userSaid.toLowerCase();
+        const userSaid = sc.inputAudioTranscription.text.trim();
+        const normalized = normalizeSpeechText(userSaid);
+        if (!normalized) return;
+        saveUserSpeechText(userSaid);
 
-        if (isSpeaking && userSaid.trim().length > 3) {
-          interruptAndStartNewTurn(userSaid);
+        if (isStopCommand(normalized)) {
+          if (isSpeaking || isThinking) stopCurrentResponseOnly();
           return;
         }
 
         // Check for agent switch command during active session
-        if (/\b(switch to priya|call priya|activate priya|female agent)\b/.test(t)) {
+        if (isSwitchToPriya(normalized) && activeAgent !== 'priya') {
+          currentSessionId = null;
+          currentSessionAgent = null;
           switchAgent('priya');
           closeLiveSession();
           setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
           return;
         }
-        if (/\b(switch to vivek|back to vivek|male agent|switch back|call vivek|activate vivek)\b/.test(t) && activeAgent !== 'vivek') {
+        if (isSwitchToVivek(normalized) && activeAgent !== 'vivek') {
+          currentSessionId = null;
+          currentSessionAgent = null;
           switchAgent('vivek');
           closeLiveSession();
           setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
@@ -1386,18 +1455,21 @@ async function startGeminiSession(initialText) {
         }
 
         // Color change
-        const colorWords = t.split(/\s+/);
-        if (/\b(color|colour|orb|change|make|set)\b/.test(t)) {
+        const colorWords = normalized.split(/\s+/);
+        if (/\b(color|colour|orb|change|make|set)\b/.test(normalized)) {
           for (const w of colorWords) { if (COLOR_MAP[w]) { setColor(COLOR_MAP[w]); break; } }
         }
 
         // Save instruction if Boss gave one
         detectAndSaveInstruction(userSaid);
-        saveMessage('user', userSaid);
       }
 
       if (sc.turnComplete) {
-        if (assistantBuffer) { saveMessage('assistant', assistantBuffer); assistantBuffer = ''; }
+        if (assistantBuffer) {
+          saveAssistantSpeechText(assistantBuffer);
+          assistantBuffer = '';
+        }
+        suppressModelAudioUntilTurnComplete = false;
         isThinking = false;
         const remaining = audioCtx ? Math.max(0, nextPlayTime - audioCtx.currentTime) : 0;
         setTimeout(function() {
