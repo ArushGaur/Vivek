@@ -1255,7 +1255,18 @@ function toggleHistory() {
 async function startMicCapture() {
   if (micStream) return;
   try {
-    ensureAudioCtx(); nativeSR = audioCtx.sampleRate;
+    ensureAudioCtx();
+    // Ensure AudioContext is running — it may be suspended if gesture was not yet given
+    if (audioCtx.state === 'suspended') {
+      try { await audioCtx.resume(); } catch(e) {}
+    }
+    if (audioCtx.state !== 'running') {
+      console.warn('[VIVEK] AudioContext not running, state:', audioCtx.state);
+      // Can't start mic without running AudioContext — retry after short delay
+      setTimeout(() => { if (!micStream && isListening) startMicCapture(); }, 500);
+      return;
+    }
+    nativeSR = audioCtx.sampleRate;
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -1381,7 +1392,7 @@ function stopAll() {
   stopGeminiPlayback();
   closeLiveSession();
   setOrbMode('idle');
-  if (apiKey) setTimeout(() => startGeminiSession(null), 450);
+  if (apiKey && gestureUnlocked) setTimeout(() => startGeminiSession(null), 450);
 }
 
 function stopSpeaking() { stopAll(); }
@@ -1606,11 +1617,11 @@ async function startGeminiSession(initialText) {
           return;
         }
         // Back off longer on repeated pre-setup failures
-        setTimeout(() => startGeminiSession(null), 1500 * connectFails);
+        if (gestureUnlocked) setTimeout(() => startGeminiSession(null), 1500 * connectFails);
       } else {
         // Normal close after a successful session — reconnect quietly
         connectFails = 0;
-        setTimeout(() => startGeminiSession(null), 800);
+        if (gestureUnlocked) setTimeout(() => startGeminiSession(null), 800);
       }
     }
   };
@@ -1656,6 +1667,37 @@ function updateAgentUI() {
 var bootLines = ['bl1','bl2','bl3','bl4','bl5'];
 var bootIdx = 0, bootPct = 0;
 
+// Tracks whether the user has given the first gesture (needed for AudioContext + mic)
+let gestureUnlocked = false;
+
+async function unlockAndStart() {
+  if (gestureUnlocked) return;
+  gestureUnlocked = true;
+
+  // This runs inside a user gesture — safe to unlock AudioContext and request mic
+  try {
+    ensureAudioCtx();
+    // Pre-request mic permission now while we are in the gesture handler
+    // so startMicCapture() later never fails due to missing gesture
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      // Store this pre-granted stream so startMicCapture can reuse it
+      micStream = stream;
+      // Immediately stop the tracks — startMicCapture will re-open with full settings
+      stream.getTracks().forEach(t => t.stop());
+      micStream = null;
+    }
+  } catch(e) {
+    console.warn('[VIVEK] Mic pre-request failed:', e.message);
+  }
+
+  const txEl = document.getElementById('transcript-text');
+  txEl.textContent = 'Neural bridge connecting…';
+  txEl.classList.add('active');
+  connectFails = 0;
+  startGeminiSession(null);
+}
+
 function runBoot() {
   var bar = document.getElementById('boot-bar');
   var pct = document.getElementById('boot-pct');
@@ -1670,58 +1712,83 @@ function runBoot() {
     }
     if (bootPct >= 100) {
       clearInterval(iv);
-      setTimeout(function() {
-        var overlay = document.getElementById('boot-overlay');
-        overlay.style.opacity = '0';
-        setTimeout(async function() {
-          overlay.style.display = 'none';
-          // Load persisted state
-          loadInstructions();
-          const savedAgent = localStorage.getItem('vivek_active_agent') || 'vivek';
-          activeAgent = savedAgent;
-          updateAgentUI();
-          setColor(AGENTS[activeAgent].color);
-          
-          const txEl = document.getElementById('transcript-text');
-          const loaded = await fetchApiKey();
-          if (loaded) {
-            txEl.textContent = 'Tap anywhere or press any key to activate…';
-            txEl.classList.add('active');
-            // Auto-activate on first user gesture (browser AudioContext policy)
-            function autoActivate() {
-              document.removeEventListener('click', autoActivate);
-              document.removeEventListener('keydown', autoActivate);
-              document.removeEventListener('touchstart', autoActivate);
-              if (isDormant && apiKey) {
-                connectFails = 0;
-                ensureAudioCtx();
-                startGeminiSession(null);
-              }
-            }
-            document.addEventListener('click', autoActivate);
-            document.addEventListener('keydown', autoActivate);
-            document.addEventListener('touchstart', autoActivate);
-            // On desktop browsers that allow autoplay after page interaction,
-            // try to start automatically after a short delay
-            setTimeout(() => {
-              if (isDormant && apiKey) {
-                try {
-                  ensureAudioCtx();
-                  // Only auto-start if AudioContext is already running (no gesture needed)
-                  if (audioCtx && audioCtx.state === 'running') {
-                    document.removeEventListener('click', autoActivate);
-                    document.removeEventListener('keydown', autoActivate);
-                    document.removeEventListener('touchstart', autoActivate);
-                    connectFails = 0;
-                    startGeminiSession(null);
-                  }
-                } catch(e) {}
-              }
-            }, 1200);
-          } else {
-            txEl.textContent = 'Backend offline. Check BACKEND_URL in app.js.'; txEl.classList.add('active');
+      setTimeout(async function() {
+        // Load persisted state before showing activate button
+        loadInstructions();
+        const savedAgent = localStorage.getItem('vivek_active_agent') || 'vivek';
+        activeAgent = savedAgent;
+        updateAgentUI();
+        setColor(AGENTS[activeAgent].color);
+
+        const loaded = await fetchApiKey();
+        const overlay = document.getElementById('boot-overlay');
+
+        if (!loaded) {
+          // Backend offline — show error inside overlay
+          const statusEl = overlay.querySelector('.boot-status') || overlay;
+          const errDiv = document.createElement('div');
+          errDiv.style.cssText = 'color:#ff4444;margin-top:20px;font-family:monospace;font-size:13px;';
+          errDiv.textContent = 'BACKEND OFFLINE — Check BACKEND_URL in app.js';
+          overlay.appendChild(errDiv);
+          return;
+        }
+
+        // Replace boot bar area with a single ACTIVATE button
+        // This button IS the user gesture — clicking it unlocks AudioContext + mic
+        const activateBtn = document.createElement('button');
+        activateBtn.id = 'activate-btn';
+        activateBtn.textContent = '⬡  ACTIVATE  ⬡';
+        activateBtn.style.cssText = [
+          'margin-top:32px',
+          'padding:14px 48px',
+          'background:transparent',
+          'border:2px solid rgba(255,154,0,0.8)',
+          'color:#ff9a00',
+          'font-family:inherit',
+          'font-size:15px',
+          'letter-spacing:4px',
+          'cursor:pointer',
+          'border-radius:4px',
+          'transition:all 0.2s',
+          'text-transform:uppercase',
+          'box-shadow:0 0 24px rgba(255,154,0,0.3)',
+          'animation:pulse-btn 1.5s ease-in-out infinite',
+        ].join(';');
+
+        // Add pulse animation
+        if (!document.getElementById('activate-btn-style')) {
+          const style = document.createElement('style');
+          style.id = 'activate-btn-style';
+          style.textContent = '@keyframes pulse-btn { 0%,100%{box-shadow:0 0 20px rgba(255,154,0,0.3)} 50%{box-shadow:0 0 40px rgba(255,154,0,0.7)} }';
+          document.head.appendChild(style);
+        }
+
+        // Hide the boot bar, show the button
+        const barWrap = document.getElementById('boot-bar-wrap') || bar.parentElement;
+        if (barWrap) barWrap.style.display = 'none';
+        overlay.appendChild(activateBtn);
+
+        activateBtn.addEventListener('click', async function() {
+          activateBtn.textContent = 'INITIALIZING…';
+          activateBtn.disabled = true;
+          // Fade out the overlay
+          overlay.style.transition = 'opacity 0.6s';
+          overlay.style.opacity = '0';
+          setTimeout(() => { overlay.style.display = 'none'; }, 650);
+          await unlockAndStart();
+        });
+
+        // Also allow keyboard activation (space/enter)
+        document.addEventListener('keydown', async function onKey(e) {
+          if (e.code === 'Space' || e.code === 'Enter') {
+            document.removeEventListener('keydown', onKey);
+            overlay.style.transition = 'opacity 0.6s';
+            overlay.style.opacity = '0';
+            setTimeout(() => { overlay.style.display = 'none'; }, 650);
+            await unlockAndStart();
           }
-        }, 900);
+        });
+
       }, 280);
     }
   }, 25);
@@ -1736,6 +1803,7 @@ requestAnimationFrame(drawJarvisInterface);
 runBoot();
 
 canvas.addEventListener('click', function() {
+  if (!gestureUnlocked) return; // gesture not yet given — boot button handles first click
   ensureAudioCtx();
   if (isSpeaking || isListening || isThinking) stopAll();
   else if (isDormant && apiKey) {
