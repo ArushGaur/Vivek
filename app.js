@@ -121,7 +121,8 @@ STRICT RULES:
 - Never be sycophantic or over-complimentary.
 - Keep responses concise but complete. Don't ramble.
 - If Boss gives you an instruction or preference, acknowledge it and remember it for all future interactions.
-- If Boss says something like "from now on", "always", "never", "remember this" — treat it as a permanent instruction.`
+- If Boss says something like "from now on", "always", "never", "remember this" — treat it as a permanent instruction.
+- For ANY live data — IPL scores, cricket scores, stock prices, news, weather, sports results — ALWAYS use Google Search to get real-time data. Never guess or make up scores. Say "Sir, let me check that for you" and search immediately.`
   },
 
   priya: {
@@ -161,7 +162,8 @@ ${instructions.length > 0 ? `Boss has given these instructions that you must alw
 STRICT RULES:
 - Never give raw textbook answers. Always in your warm Hinglish personality.
 - Keep responses focused and helpful — don't over-explain.
-- If Boss gives an instruction, acknowledge in Hindi+English and follow it permanently.`
+- If Boss gives an instruction, acknowledge in Hindi+English and follow it permanently.
+- For ANY live data — IPL scores, cricket scores, stock prices, news, weather, sports results — ALWAYS use Google Search to get real-time data. Never guess or make up scores. Say "Sir, ek second, main check karti hoon" and search immediately.`
   }
 };
 
@@ -1045,6 +1047,7 @@ function stopGeminiPlayback() {
   ORB.speakAmp = 0;
   if (speakIv) clearInterval(speakIv);
   document.getElementById('stop-btn').style.display = 'none';
+  stopBargeInDetection(); // stop listening for agent switch
   for (const src of activeGeminiSources) {
     try { src.stop(); } catch(e) {}
   }
@@ -1395,7 +1398,59 @@ function stopAll() {
   if (apiKey && gestureUnlocked) setTimeout(() => startGeminiSession(null), 450);
 }
 
-function stopSpeaking() { stopAll(); }
+let bargeInRec = null;
+let bargeInRunning = false;
+
+function startBargeInDetection() {
+  if (!SpeechRec || bargeInRunning) return;
+  try { bargeInRec = new SpeechRec(); } catch(e) { return; }
+  bargeInRec.continuous = true;
+  bargeInRec.interimResults = true;
+  bargeInRec.lang = activeAgent === 'priya' ? 'hi-IN' : 'en-IN';
+  bargeInRunning = true;
+
+  bargeInRec.onresult = function(e) {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript.toLowerCase().trim();
+      const normalized = normalizeSpeechText(t);
+      const cmd = detectCommand(normalized);
+
+      if (cmd === 'SWITCH_PRIYA' && activeAgent !== 'priya') {
+        stopBargeInDetection();
+        stopCurrentResponseOnly();
+        switchAgent('priya');
+        closeLiveSession();
+        setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
+        return;
+      }
+      if (cmd === 'SWITCH_VIVEK' && activeAgent !== 'vivek') {
+        stopBargeInDetection();
+        stopCurrentResponseOnly();
+        switchAgent('vivek');
+        closeLiveSession();
+        setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
+        return;
+      }
+      if (cmd === 'STOP') {
+        stopBargeInDetection();
+        stopCurrentResponseOnly();
+        return;
+      }
+    }
+  };
+  bargeInRec.onend = function() {
+    bargeInRunning = false; bargeInRec = null;
+    // Restart if still speaking
+    if (isSpeaking) startBargeInDetection();
+  };
+  bargeInRec.onerror = function() { bargeInRunning = false; bargeInRec = null; };
+  try { bargeInRec.start(); } catch(e) { bargeInRunning = false; bargeInRec = null; }
+}
+
+function stopBargeInDetection() {
+  bargeInRunning = false;
+  if (bargeInRec) { try { bargeInRec.stop(); } catch(e) {} bargeInRec = null; }
+}
 
 function pulseSpeaking() {
   if (speakIv) clearInterval(speakIv);
@@ -1453,7 +1508,8 @@ async function startGeminiSession(initialText) {
         },
         outputAudioTranscription: {},
         inputAudioTranscription: {},
-        systemInstruction: { parts: [{ text: systemPrompt }] }
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        tools: [{ googleSearch: {} }]
       }
     }));
   };
@@ -1486,6 +1542,7 @@ async function startGeminiSession(initialText) {
               setOrbMode('speaking');
               document.getElementById('stop-btn').style.display = 'block';
               pulseSpeaking();
+              startBargeInDetection(); // listen for agent switch while speaking
             }
             playGeminiChunk(part.inlineData.data);
           }
@@ -1733,61 +1790,35 @@ function runBoot() {
           return;
         }
 
-        // Replace boot bar area with a single ACTIVATE button
-        // This button IS the user gesture — clicking it unlocks AudioContext + mic
-        const activateBtn = document.createElement('button');
-        activateBtn.id = 'activate-btn';
-        activateBtn.textContent = '⬡  ACTIVATE  ⬡';
-        activateBtn.style.cssText = [
-          'margin-top:32px',
-          'padding:14px 48px',
-          'background:transparent',
-          'border:2px solid rgba(255,154,0,0.8)',
-          'color:#ff9a00',
-          'font-family:inherit',
-          'font-size:15px',
-          'letter-spacing:4px',
-          'cursor:pointer',
-          'border-radius:4px',
-          'transition:all 0.2s',
-          'text-transform:uppercase',
-          'box-shadow:0 0 24px rgba(255,154,0,0.3)',
-          'animation:pulse-btn 1.5s ease-in-out infinite',
-        ].join(';');
+        // Auto-start immediately — no ACTIVATE button needed
+        // Fade out the overlay automatically
+        overlay.style.transition = 'opacity 0.6s';
+        overlay.style.opacity = '0';
+        setTimeout(() => { overlay.style.display = 'none'; }, 650);
 
-        // Add pulse animation
-        if (!document.getElementById('activate-btn-style')) {
-          const style = document.createElement('style');
-          style.id = 'activate-btn-style';
-          style.textContent = '@keyframes pulse-btn { 0%,100%{box-shadow:0 0 20px rgba(255,154,0,0.3)} 50%{box-shadow:0 0 40px rgba(255,154,0,0.7)} }';
-          document.head.appendChild(style);
-        }
-
-        // Hide the boot bar, show the button
+        // Hide the boot bar
         const barWrap = document.getElementById('boot-bar-wrap') || bar.parentElement;
         if (barWrap) barWrap.style.display = 'none';
-        overlay.appendChild(activateBtn);
 
-        activateBtn.addEventListener('click', async function() {
-          activateBtn.textContent = 'INITIALIZING…';
-          activateBtn.disabled = true;
-          // Fade out the overlay
-          overlay.style.transition = 'opacity 0.6s';
-          overlay.style.opacity = '0';
-          setTimeout(() => { overlay.style.display = 'none'; }, 650);
+        // Auto-unlock on first any interaction (click, key, touch) OR just start after short delay
+        const autoStart = async () => {
+          document.removeEventListener('click', autoStart);
+          document.removeEventListener('keydown', autoStart);
+          document.removeEventListener('touchstart', autoStart);
           await unlockAndStart();
-        });
+        };
 
-        // Also allow keyboard activation (space/enter)
-        document.addEventListener('keydown', async function onKey(e) {
-          if (e.code === 'Space' || e.code === 'Enter') {
-            document.removeEventListener('keydown', onKey);
-            overlay.style.transition = 'opacity 0.6s';
-            overlay.style.opacity = '0';
-            setTimeout(() => { overlay.style.display = 'none'; }, 650);
-            await unlockAndStart();
-          }
-        });
+        // Listen for first interaction to unlock AudioContext (browser requires user gesture)
+        document.addEventListener('click', autoStart, { once: true });
+        document.addEventListener('keydown', autoStart, { once: true });
+        document.addEventListener('touchstart', autoStart, { once: true });
+
+        // Update transcript to guide the user
+        const txEl2 = document.getElementById('transcript-text');
+        if (txEl2) {
+          txEl2.textContent = `Tap anywhere or say "${AGENTS[activeAgent].label}" to begin…`;
+          txEl2.classList.add('active');
+        }
 
       }, 280);
     }
