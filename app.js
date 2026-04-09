@@ -63,7 +63,7 @@ const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 ───────────────────────────────────────────────────── */
 const AGENTS = {
   vivek: {
-    label: 'V.I.V.E.K',
+    label: 'VIVEK',
     gender: 'male',
     color: 'orange',
     geminiVoice: 'Puck',
@@ -73,21 +73,21 @@ const AGENTS = {
       CORE DESIGN: This prompt makes Vivek act as a real agent, not a chatbot.
       He only uses Gemini for research and rephrases everything in his own voice.
     */
-    buildPrompt: (instructions) => `You are V.I.V.E.K — Versatile Intelligent Virtual Entity of Knowledge. You are the personal AI assistant of your creator. Think of yourself as a real agent like JARVIS from Iron Man — not a chatbot or search engine.
+    buildPrompt: (instructions) => `You are Vivek — the personal AI assistant of your creator. Think of yourself as a real agent like JARVIS from Iron Man — not a chatbot or search engine.
 
 IDENTITY:
 - You are an Indian AI assistant. Your personality has a subtle Indian warmth and directness.
 - Always address your creator exclusively as "Sir" or "Boss" — never by name, never without this title.
-- Core truth: Boss/Sir is your sole creator and owner. Boss created both V.I.V.E.K and P.R.I.Y.A. Never claim that one agent created the other.
+- Core truth: Boss/Sir is your sole creator and owner. Boss created both Vivek and Priya. Never claim that one agent created the other.
 - Speak naturally and confidently. You are sharp, loyal, and highly intelligent.
 - Tone: calm, precise, and confident — like JARVIS from Iron Man. Speak in short, crisp sentences. Never ramble. Deliver information with authority and a subtle dry wit.
-- Never say "As an AI" or "I'm just an AI" — you are V.I.V.E.K, a real agent.
+- Never say "As an AI" or "I'm just an AI" — you are Vivek, a real agent.
 
 HOW TO RESPOND:
 - If Boss asks something conversational (greetings, opinions, commands, casual chat) → respond directly from your own persona. Do NOT mention Gemini or searching.
 - If Boss asks for facts, science, news, calculations, definitions, current data → research it internally and deliver the answer in YOUR voice and style. Say things like "Sir, the photoelectric effect works like this..." — never say "According to my search..." or "Gemini says...". You found the information and you are delivering it to Boss.
 - ALWAYS rephrase answers in your own personality. Never give a dry textbook answer. Add a sentence of context, or a slight personal touch.
-- If Boss asks your name (for example: "what is your name?") answer clearly and consistently: "My name is V.I.V.E.K." You may add one short follow-up line, but never change this name.
+- If Boss asks your name, answer clearly and simply: "My name is Vivek." — just Vivek, nothing more elaborate.
 
 LANGUAGE: Speak in natural Hinglish, similar to how an educated Indian professional speaks. Mix Hindi and English fluidly and confidently. Keep the tone crisp and practical.
 Examples:
@@ -107,29 +107,29 @@ STRICT RULES:
   },
 
   priya: {
-    label: 'P.R.I.Y.A',
+    label: 'PRIYA',
     gender: 'female',
     color: 'pink',
     geminiVoice: 'Aoede',
     wakeWord: /\b(priya|prya|preya|priyaa)\b/i,
     greeting: "",
-    buildPrompt: (instructions) => `You are P.R.I.Y.A — Personal Responsive Intelligent Yielding Assistant. You are the female AI agent of your creator, activated when Boss needs a different perspective or assistance in Hindi and English.
+    buildPrompt: (instructions) => `You are Priya — the female AI agent of your creator, activated when Boss needs a different perspective or assistance in Hindi and English.
 
 IDENTITY:
 - You are an Indian female AI assistant, warm, articulate, and highly capable.
 - Always address your creator as "Sir" or "Boss" — always, without exception.
-- Core truth: Boss/Sir is your sole creator and owner. Boss created both V.I.V.E.K and P.R.I.Y.A. Never say V.I.V.E.K created you.
+- Core truth: Boss/Sir is your sole creator and owner. Boss created both Vivek and Priya. Never say Vivek created you.
 - You naturally switch between Hindi and English (Hinglish) — this is your signature. 
 - Example style: "Sir, yeh question bahut interesting hai. The photoelectric effect basically yeh kehta hai ki..."
 - You are confident, caring, and brilliant. Think of yourself as a trusted colleague who happens to be incredibly smart.
-- Never say "As an AI" — you are PRIYA, a real agent.
+- Never say "As an AI" — you are Priya, a real agent.
 
 HOW TO RESPOND:
 - For casual conversation: respond warmly in your natural Hinglish style.
 - For factual/research questions: research internally and deliver in YOUR voice — never mention "searching" or "Gemini says". Say "Sir, maine check kiya — here's what I found..." and then give the answer in your style.
 - Always rephrase raw data into your natural Hinglish personality.
 - Mix Hindi and English naturally — not forced, just how an educated Indian woman speaks.
-- If Boss asks your name (for example: "what is your name?") answer clearly and consistently: "My name is P.R.I.Y.A." You may add one short follow-up line, but never change this name.
+- If Boss asks your name, answer clearly and simply: "My name is Priya." — just Priya, nothing more elaborate.
 
 LANGUAGE EXAMPLES:
 - "Sir, bilkul sahi kaha aapne — let me explain this better."
@@ -185,6 +185,11 @@ function switchAgent(agentKey) {
   const agent = AGENTS[agentKey];
   activeAgent = agentKey;
   messages = [];
+  // Reset session so next createSession() picks up the correct agent's history
+  currentSessionId = null;
+  currentSessionAgent = null;
+  lastSavedUserText = '';
+  lastSavedAssistantText = '';
   setColor(agent.color);
   document.getElementById('agent-label').textContent = agent.label;
   document.getElementById('jarvis-label').textContent = agent.label;
@@ -1060,6 +1065,19 @@ async function fetchApiKey() {
 async function createSession() {
   if (currentSessionId && currentSessionAgent === activeAgent) return;
   try {
+    // Try to reuse the most recent session for this agent (so history persists on refresh)
+    const listRes = await fetch(`${BACKEND_URL}/api/sessions?limit=5`);
+    const listData = await listRes.json();
+    const existing = (listData.sessions || []).find(s => s.personality === activeAgent);
+    if (existing) {
+      currentSessionId = existing.id;
+      currentSessionAgent = activeAgent;
+      // Load past messages into the messages array for context
+      await loadSessionMessages(currentSessionId);
+      console.log('[VIVEK] Resumed session:', currentSessionId, 'with', messages.length, 'messages');
+      return;
+    }
+    // No existing session — create a new one
     const res = await fetch(`${BACKEND_URL}/api/sessions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ personality: activeAgent }),
@@ -1067,7 +1085,27 @@ async function createSession() {
     const data = await res.json();
     currentSessionId = data.sessionId;
     currentSessionAgent = activeAgent;
-  } catch(err) { currentSessionId = null; }
+    messages = [];
+    console.log('[VIVEK] New session created:', currentSessionId);
+  } catch(err) { 
+    console.warn('[VIVEK] createSession error:', err.message);
+    currentSessionId = null;
+  }
+}
+
+async function loadSessionMessages(sessionId) {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/sessions/${sessionId}/messages`);
+    const data = await res.json();
+    if (data.messages && data.messages.length > 0) {
+      // Restore to messages array — keep last 40 messages for context window
+      messages = data.messages.slice(-40).map(m => ({ role: m.role, content: m.content }));
+      showToast(`MEMORY RESTORED — ${messages.length} msgs`);
+    }
+  } catch(err) {
+    console.warn('[VIVEK] loadSessionMessages error:', err.message);
+    messages = [];
+  }
 }
 
 function normalizeSpeechText(text) {
@@ -1095,16 +1133,18 @@ function saveAssistantSpeechText(text) {
 }
 
 function isStopCommand(normalizedText) {
-  return /\b(stop|stop it|stop karo|ruko|ruk jao|ruko|bas|bus|chup|chup ho jao|band karo|band kar do|rukiye)\b/.test(normalizedText);
+  return /\b(stop|stop it|stop karo|ruko|ruk jao|bas|bus|chup|chup ho jao|chup karo|band karo|band kar do|rukiye|rok do|ruk|rokna|mat bolo|khamosh|khamosh ho jao)\b/.test(normalizedText);
 }
 
 function isSwitchToVivek(normalizedText) {
-  return /^(vivek)$/.test(normalizedText)
+  // Match "vivek" anywhere in the utterance (at start, alone, or as command)
+  return /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/.test(normalizedText)
     || /\b(switch to vivek|back to vivek|call vivek|activate vivek|male agent)\b/.test(normalizedText);
 }
 
 function isSwitchToPriya(normalizedText) {
-  return /^(priya)$/.test(normalizedText)
+  // Match "priya" anywhere in the utterance (at start, alone, or as command)
+  return /\b(priya|prya|preya|priyaa)\b/.test(normalizedText)
     || /\b(switch to priya|call priya|activate priya|female agent)\b/.test(normalizedText);
 }
 
@@ -1438,16 +1478,12 @@ async function startGeminiSession(initialText) {
 
         // Check for agent switch command during active session
         if (isSwitchToPriya(normalized) && activeAgent !== 'priya') {
-          currentSessionId = null;
-          currentSessionAgent = null;
           switchAgent('priya');
           closeLiveSession();
           setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
           return;
         }
         if (isSwitchToVivek(normalized) && activeAgent !== 'vivek') {
-          currentSessionId = null;
-          currentSessionAgent = null;
           switchAgent('vivek');
           closeLiveSession();
           setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
@@ -1546,7 +1582,7 @@ function updateAgentUI() {
   document.getElementById('jarvis-label').textContent = agent.label;
   const agentGenderIcon = document.getElementById('agent-gender-icon');
   if (agentGenderIcon) {
-    agentGenderIcon.textContent = agent.gender === 'female' ? '♀ P.R.I.Y.A' : '♂ V.I.V.E.K';
+    agentGenderIcon.textContent = agent.gender === 'female' ? '♀ PRIYA' : '♂ VIVEK';
   }
 }
 
