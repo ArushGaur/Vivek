@@ -1836,7 +1836,6 @@ async function startGeminiSession(initialText) {
         if (isGraphRequest(userSaid)) {
           let equation = extractEquationFromSpeech(userSaid);
           openDesmosGraph(equation);
-          showToast('GRAPH OPENED');
         }
 
         // Music request — Spotify playback
@@ -1962,8 +1961,6 @@ function showToast(msg) {
 /* ─────────────────────────────────────────────────────
    DESMOS GRAPH CALCULATOR
 ───────────────────────────────────────────────────── */
-// Stores the pending Desmos URL set by voice command
-let pendingDesmosUrl = null;
 
 function openDesmosGraph(equation) {
   let expr = '';
@@ -1984,55 +1981,15 @@ function openDesmosGraph(equation) {
     url = 'https://www.desmos.com/calculator#' + encoded;
   }
 
-  // Try direct open first (works if called from a button click / gesture)
-  const w = window.open(url, '_blank');
-  if (w) {
-    showToast('GRAPH OPENED');
-    const txEl = document.getElementById('transcript-text');
-    if (txEl) { txEl.textContent = 'Graph opened — Sir'; txEl.classList.add('active'); }
-    console.log('[VIVEK] Desmos opened directly:', url);
-    return;
-  }
-
-  // Popup was blocked (called from async voice callback) — show banner with open link
-  pendingDesmosUrl = url;
-  showDesmosNotification(expr || 'graph', url);
-  console.log('[VIVEK] Desmos popup blocked, showing notification banner');
-}
-
-function showDesmosNotification(label, url) {
-  const existing = document.getElementById('desmos-notify');
-  if (existing) existing.remove();
-
-  const banner = document.createElement('div');
-  banner.id = 'desmos-notify';
-  banner.style.cssText = `
-    position:fixed; bottom:90px; left:50%; transform:translateX(-50%);
-    background:#0a0a1a; border:1px solid rgba(255,154,0,0.6);
-    color:#ff9a00; font-family:'Orbitron',monospace; font-size:12px;
-    letter-spacing:.1em; padding:12px 20px; z-index:9999;
-    display:flex; align-items:center; gap:14px; border-radius:4px;
-    box-shadow:0 0 24px rgba(255,154,0,0.3);
-  `;
-  banner.innerHTML = `
-    <span>⬡ GRAPH READY</span>
-    <a href="${url}" target="_blank"
-       style="color:#fff;background:rgba(255,154,0,0.2);border:1px solid rgba(255,154,0,0.5);
-              padding:5px 14px;text-decoration:none;cursor:pointer;letter-spacing:.08em;"
-       onclick="document.getElementById('desmos-notify').remove()">
-      OPEN →
-    </a>
-    <button onclick="document.getElementById('desmos-notify').remove()"
-      style="background:none;border:none;color:rgba(255,154,0,0.5);cursor:pointer;font-size:16px;">✕</button>
-  `;
-  document.body.appendChild(banner);
-
-  // Auto-dismiss after 15 seconds
-  setTimeout(() => { if (banner.parentNode) banner.remove(); }, 15000);
-
+  // Directly navigate to Desmos — works from both sync and async contexts
+  showToast('OPENING DESMOS...');
   const txEl = document.getElementById('transcript-text');
-  if (txEl) { txEl.textContent = 'Graph ready — tap OPEN in the banner — Sir'; txEl.classList.add('active'); }
+  if (txEl) { txEl.textContent = 'Redirecting to Desmos graph — Sir'; txEl.classList.add('active'); }
+  console.log('[VIVEK] Redirecting to Desmos:', url);
+  window.location.href = url;
 }
+
+
 
 function extractEquationFromSpeech(text) {
   // Normalize spoken math: "x squared" -> "x^2", "x cubed" -> "x^3", etc.
