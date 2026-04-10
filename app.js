@@ -1775,26 +1775,32 @@ function showToast(msg) {
 ───────────────────────────────────────────────────── */
 function openDesmosGraph(equation) {
   const modal = document.getElementById('desmos-modal');
-  const frame = document.getElementById('desmos-frame');
-  if (!modal || !frame) return;
+  const txEl = document.getElementById('transcript-text');
   
   // Build Desmos URL with equation
   let desmosUrl = 'https://www.desmos.com/calculator';
   if (equation) {
-    // Encode equation for Desmos
     const encoded = encodeURIComponent(equation.replace(/ /g, ''));
     desmosUrl += '?q=' + encoded;
   }
   
-  frame.src = desmosUrl;
-  modal.classList.add('show');
+  console.log('[VIVEK] Opening Desmos:', desmosUrl);
+  
+  // Try popup first, fallback to new tab
+  const popup = window.open(desmosUrl, '_blank', 'width=1000,height=700');
+  if (popup && !popup.closed) {
+    if (txEl) { txEl.textContent = 'Graph opened in new window'; txEl.classList.add('active'); }
+  } else {
+    // Fallback: try direct URL
+    window.location.href = desmosUrl;
+  }
+  
+  if (modal) modal.classList.add('show');
 }
 
 function closeDesmosModal() {
   const modal = document.getElementById('desmos-modal');
-  const frame = document.getElementById('desmos-frame');
   if (modal) modal.classList.remove('show');
-  if (frame) frame.src = 'about:blank';
 }
 
 function isGraphRequest(text) {
