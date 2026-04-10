@@ -78,26 +78,37 @@ app.post('/api/chat', async (req, res) => {
   if (!groqKey) return res.status(503).json({ error: 'GROQ_API_KEY not configured' });
 
   try {
-    const body = JSON.stringify({
-      model: 'llama-3.3-70b-specdec',
-      messages: messages,
-      max_tokens: 500,
-      temperature: 0.75,
-      stream: false,
-    });
+    const modelsToTry = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+    let lastError = null;
 
-    const groqRes = await fetchJSON('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${groqKey}`,
-        'Content-Type': 'application/json',
-      },
-      body,
-    });
+    for (const model of modelsToTry) {
+      try {
+        const body = JSON.stringify({
+          model,
+          messages: messages,
+          max_tokens: 500,
+          temperature: 0.75,
+          stream: false,
+        });
 
-    const reply = groqRes.choices?.[0]?.message?.content || '';
-    if (!reply) return res.status(500).json({ error: 'Empty response from Groq' });
-    res.json({ reply });
+        const groqRes = await fetchJSON('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${groqKey}`,
+            'Content-Type': 'application/json',
+          },
+          body,
+        });
+
+        const reply = groqRes.choices?.[0]?.message?.content || '';
+        if (reply) return res.json({ reply });
+        lastError = new Error(`Empty response from Groq model: ${model}`);
+      } catch (modelErr) {
+        lastError = modelErr;
+      }
+    }
+
+    throw lastError || new Error('All Groq models failed');
 
   } catch (err) {
     console.error('[VIVEK] Groq error:', err.message);
