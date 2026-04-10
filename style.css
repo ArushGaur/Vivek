@@ -321,7 +321,7 @@ body::after {
   position: fixed;
   bottom: 36px; left: 50%;
   transform: translateX(-50%);
-  display: flex; align-items: center; gap: 14px;
+  display: flex; align-items: center;
   font-family: var(--font-hud);
   font-size: 0.55rem;
   letter-spacing: .18em;
@@ -342,23 +342,38 @@ body::after {
   transition: color 0.4s;
 }
 
-#agent-switch-btn {
+#agent-switch-top {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 260;
   background: transparent;
   border: 1px solid rgba(255,154,0,.35);
   color: rgba(255,154,0,.6);
   font-family: var(--font-hud);
-  font-size: 0.48rem;
+  font-size: 0.5rem;
   letter-spacing: .14em;
-  padding: 5px 12px;
+  padding: 7px 13px;
   cursor: pointer;
   transition: all 0.2s;
-  border-radius: 1px;
+  border-radius: 2px;
+  backdrop-filter: blur(8px);
+  background: rgba(0,0,0,0.35);
 }
-#agent-switch-btn:hover {
+#agent-switch-top:hover {
   border-color: rgba(255,154,0,.8);
   color: rgba(255,154,0,1);
   box-shadow: 0 0 12px rgba(255,154,0,.25);
   background: rgba(255,154,0,.06);
+}
+
+@media (max-width: 700px) {
+  #agent-switch-top {
+    top: 14px;
+    right: 12px;
+    font-size: 0.46rem;
+    padding: 6px 10px;
+  }
 }
 
 /* ── INSTRUCTIONS PANEL ───────────────────────────── */
