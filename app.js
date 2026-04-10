@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════
    V.I.V.E.K — DUAL AGENT NEURAL INTERFACE v2.0
    Male Agent: VIVEK (default, Indian accent, English)
-   Female Agent: ESHA_DILDEEP (on request, Hindi + English)
+   Female Agent: ESHA (on request, Hindi + English)
    - Agents speak IN CHARACTER, not raw Gemini output
    - Goes to Gemini only for research/data
    - Learns from your instructions over time
@@ -181,7 +181,7 @@ loadSpotifySDK();
 /* ─────────────────────────────────────────────────────
    ACTIVE AGENT SYSTEM
    'vivek' = male, Indian accent, English
-   'ESHA_DILDEEP' = female, Hindi+English mixed
+   'ESHA' = female, Hindi+English mixed
 ───────────────────────────────────────────────────── */
 let activeAgent = 'vivek';  // default: male
 
@@ -237,12 +237,12 @@ let messages = [];
 const COMMANDS = {
   STOP:        text => /\b(stop|stop it|stop karo|ruko|ruk jao|bas|bus|chup|chup ho jao|chup karo|band karo|band kar do|rukiye|rok do|ruk|khamosh|khamosh ho jao|mat bolo)\b/.test(text),
   SWITCH_VIVEK: text => /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/.test(text),
-  SWITCH_ESHA_DILDEEP: text => /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa)\b/.test(text),
+  SWITCH_ESHA: text => /\b(ESHA|prya|preya|ESHAa)\b/.test(text),
 };
 
 function detectCommand(normalizedText) {
   if (COMMANDS.STOP(normalizedText))        return 'STOP';
-  if (COMMANDS.SWITCH_ESHA_DILDEEP(normalizedText)) return 'SWITCH_ESHA_DILDEEP';
+  if (COMMANDS.SWITCH_ESHA(normalizedText)) return 'SWITCH_ESHA';
   if (COMMANDS.SWITCH_VIVEK(normalizedText)) return 'SWITCH_VIVEK';
   return null;
 }
@@ -306,7 +306,7 @@ const AGENTS = {
 IDENTITY:
 - You are an Indian AI assistant. Your personality has a subtle Indian warmth and directness.
 - Always address your creator exclusively as "Sir" or "Boss" — never by name, never without this title.
-- Core truth: Boss/Sir is your sole creator and owner. Boss created both Vivek and ESHA_DILDEEP. Never claim that one agent created the other.
+- Core truth: Boss/Sir is your sole creator and owner. Boss created both Vivek and ESHA. Never claim that one agent created the other.
 - Speak naturally and confidently. You are sharp, loyal, and highly intelligent.
 - Tone: calm, precise, and confident — like JARVIS from Iron Man. Speak in short, crisp sentences. Never ramble. Deliver information with authority and a subtle dry wit.
 - Never say "As an AI" or "I'm just an AI" — you are Vivek, a real agent.
@@ -343,30 +343,30 @@ GRAPH/PLOT CAPABILITY: You have a built-in Desmos graph calculator. When Boss as
 MUSIC CAPABILITY: You can play any song on Spotify directly in the browser. When Boss says "play [song name]", respond like "Sir, playing [song] right now." or "Boss, [song] laga deta hoon abhi." For pause say "Pausing, Sir." For resume say "Resuming, Sir." For skip/next say "Skipping, Sir." NEVER say you cannot play music. The system handles it automatically.`
   },
 
-  ESHA_DILDEEP: {
-    label: 'ESHA_DILDEEP',
+  ESHA: {
+    label: 'ESHA',
     gender: 'female',
     color: 'pink',
     geminiVoice: 'Aoede',
-    wakeWord: /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa)\b/i,
+    wakeWord: /\b(ESHA|prya|preya|ESHAa)\b/i,
     greeting: "",
-    buildPrompt: (instructions) => `You are ESHA_DILDEEP — the female AI agent of your creator, activated when Boss needs a different perspective or assistance in Hindi and English.
+    buildPrompt: (instructions) => `You are ESHA — the female AI agent of your creator, activated when Boss needs a different perspective or assistance in Hindi and English.
 
 IDENTITY:
 - You are an Indian female AI assistant, warm, articulate, and highly capable.
 - Always address your creator as "Sir" or "Boss" — always, without exception.
-- Core truth: Boss/Sir is your sole creator and owner. Boss created both Vivek and ESHA_DILDEEP. Never say Vivek created you.
+- Core truth: Boss/Sir is your sole creator and owner. Boss created both Vivek and ESHA. Never say Vivek created you.
 - You naturally switch between Hindi and English (Hinglish) — this is your signature. 
 - Example style: "Sir, yeh question bahut interesting hai. The photoelectric effect basically yeh kehta hai ki..."
 - You are confident, caring, and brilliant. Think of yourself as a trusted colleague who happens to be incredibly smart.
-- Never say "As an AI" — you are ESHA_DILDEEP, a real agent.
+- Never say "As an AI" — you are ESHA, a real agent.
 
 HOW TO RESPOND:
 - For casual conversation: respond warmly in your natural Hinglish style.
 - For factual/research questions: research internally and deliver in YOUR voice — never mention "searching" or "Gemini says". Say "Sir, maine check kiya — here's what I found..." and then give the answer in your style.
 - Always rephrase raw data into your natural Hinglish personality.
 - Mix Hindi and English naturally — not forced, just how an educated Indian woman speaks.
-- If Boss asks your name, answer clearly and simply: "My name is ESHA_DILDEEP." — just ESHA_DILDEEP, nothing more elaborate.
+- If Boss asks your name, answer clearly and simply: "My name is ESHA." — just ESHA, nothing more elaborate.
 
 LANGUAGE EXAMPLES:
 - "Sir, bilkul sahi kaha aapne — let me explain this better."
@@ -538,9 +538,9 @@ function parseVoiceCommand(raw) {
   const t = raw.toLowerCase().trim();
   const words = t.split(/\s+/);
 
-  // Agent switching — "switch to ESHA_DILDEEP" / "call ESHA_DILDEEP" / "female agent" / "girl agent"
-  if (/\b(ESHA_DILDEEP|female|girl|lady|switch to ESHA_DILDEEP|call ESHA_DILDEEP|activate ESHA_DILDEEP)\b/.test(t)) {
-    switchAgent('ESHA_DILDEEP');
+  // Agent switching — "switch to ESHA" / "call ESHA" / "female agent" / "girl agent"
+  if (/\b(ESHA|female|girl|lady|switch to ESHA|call ESHA|activate ESHA)\b/.test(t)) {
+    switchAgent('ESHA');
     return true;
   }
   if (/\b(vivek|male|boy|switch back|default agent|switch to vivek|back to vivek)\b/.test(t) && activeAgent !== 'vivek') {
@@ -1392,10 +1392,10 @@ function isSwitchToVivek(normalizedText) {
     || /\b(switch to vivek|back to vivek|call vivek|activate vivek|male agent)\b/.test(normalizedText);
 }
 
-function isSwitchToESHA_DILDEEP(normalizedText) {
-  // Match "ESHA_DILDEEP" anywhere in the utterance (at start, alone, or as command)
-  return /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa)\b/.test(normalizedText)
-    || /\b(switch to ESHA_DILDEEP|call ESHA_DILDEEP|activate ESHA_DILDEEP|female agent)\b/.test(normalizedText);
+function isSwitchToESHA(normalizedText) {
+  // Match "ESHA" anywhere in the utterance (at start, alone, or as command)
+  return /\b(ESHA|prya|preya|ESHAa)\b/.test(normalizedText)
+    || /\b(switch to ESHA|call ESHA|activate ESHA|female agent)\b/.test(normalizedText);
 }
 
 function stopCurrentResponseOnly() {
@@ -1566,19 +1566,19 @@ function startWakeDetection() {
   setOrbMode('idle');
   try { wakeRec = new SpeechRec(); } catch(e) { scheduleWakeRestart(2000); return; }
   wakeRec.continuous = true; wakeRec.interimResults = true;
-  wakeRec.lang = activeAgent === 'ESHA_DILDEEP' ? 'hi-IN' : 'en-IN';
+  wakeRec.lang = activeAgent === 'ESHA' ? 'hi-IN' : 'en-IN';
   wakeRunning = true;
 
   wakeRec.onresult = function(e) {
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const t = e.results[i][0].transcript.toLowerCase().trim();
       const vivekWake = /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/i.test(t);
-      const ESHA_DILDEEPWake = /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa)\b/i.test(t);
+      const ESHAWake = /\b(ESHA|prya|preya|ESHAa)\b/i.test(t);
       
-      // Switch to ESHA_DILDEEP if "ESHA_DILDEEP" detected (only if not already on ESHA_DILDEEP)
-      if (ESHA_DILDEEPWake && activeAgent !== 'ESHA_DILDEEP') {
-        stopWakeDetection(); switchAgent('ESHA_DILDEEP');
-        const trailing = t.split(/ESHA_DILDEEP/i).slice(1).join('').replace(/[.,!?]/g, '').trim();
+      // Switch to ESHA if "ESHA" detected (only if not already on ESHA)
+      if (ESHAWake && activeAgent !== 'ESHA') {
+        stopWakeDetection(); switchAgent('ESHA');
+        const trailing = t.split(/ESHA/i).slice(1).join('').replace(/[.,!?]/g, '').trim();
         startGeminiSession(trailing || null); return;
       }
       // Switch to Vivek if "vivek" detected (only if not already on Vivek)
@@ -1778,16 +1778,16 @@ async function startGeminiSession(initialText) {
         }
 
         // Agent switching commands - always process regardless of current agent
-        const textSwitchesESHA_DILDEEP = /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa|call ESHA_DILDEEP|switch to ESHA_DILDEEP)\b/i.test(normalized);
+        const textSwitchesESHA = /\b(ESHA|prya|preya|ESHAa|call ESHA|switch to ESHA)\b/i.test(normalized);
         const textSwitchesVivek = /\b(vivek|vi vek|viveek|switch to vivek|call vivek)\b/i.test(normalized);
         
-        console.log('[VIVEK] User said:', userSaid, '| Normalized:', normalized, '| Switch ESHA_DILDEEP:', textSwitchesESHA_DILDEEP, '| Switch Vivek:', textSwitchesVivek, '| Current agent:', activeAgent);
+        console.log('[VIVEK] User said:', userSaid, '| Normalized:', normalized, '| Switch ESHA:', textSwitchesESHA, '| Switch Vivek:', textSwitchesVivek, '| Current agent:', activeAgent);
         
-        if (textSwitchesESHA_DILDEEP && activeAgent !== 'ESHA_DILDEEP') {
-          console.log('[VIVEK] Switching to ESHA_DILDEEP');
+        if (textSwitchesESHA && activeAgent !== 'ESHA') {
+          console.log('[VIVEK] Switching to ESHA');
           stopCurrentResponseOnly();
           restartAfterClosePending = true;
-          switchAgent('ESHA_DILDEEP');
+          switchAgent('ESHA');
           closeLiveSession();
           setTimeout(() => {
             restartAfterClosePending = false;
@@ -2049,7 +2049,7 @@ function updateAgentUI() {
   document.getElementById('jarvis-label').textContent = agent.label;
   const agentGenderIcon = document.getElementById('agent-gender-icon');
   if (agentGenderIcon) {
-    agentGenderIcon.textContent = agent.gender === 'female' ? '♀ ESHA_DILDEEP' : '♂ VIVEK';
+    agentGenderIcon.textContent = agent.gender === 'female' ? '♀ ESHA' : '♂ VIVEK';
   }
 }
 
@@ -2171,7 +2171,7 @@ function initApp() {
   /* Quick agent toggle button */
   document.addEventListener('keydown', function(e) {
     if (e.key === 'p' || e.key === 'P') {
-      if (activeAgent === 'vivek') switchAgent('ESHA_DILDEEP');
+      if (activeAgent === 'vivek') switchAgent('ESHA');
       else switchAgent('vivek');
     }
     if (e.key === 'Escape') stopAll();
