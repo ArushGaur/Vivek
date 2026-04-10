@@ -1,110 +1,154 @@
 /* ═══════════════════════════════════════════════════════
-   V.I.V.E.K — DUAL AGENT NEURAL INTERFACE v3.0
-   Male Agent: VIVEK | Female Agent: PRIYA
-   Architecture:
-   - Browser SpeechRecognition → always listening, no wake word
-   - Groq LLaMA 3.3 70b → AI responses (free)
-   - Google Search scraping (server) → live/real-time data
-   - Browser SpeechSynthesis → voice output (free)
-   - Turso DB → full conversation history
+   V.I.V.E.K — DUAL AGENT NEURAL INTERFACE v2.0
+   Male Agent: VIVEK (default, Indian accent, English)
+   Female Agent: PRIYA (on request, Hindi + English)
+   - Agents speak IN CHARACTER, not raw Gemini output
+   - Goes to Gemini only for research/data
+   - Learns from your instructions over time
 ═══════════════════════════════════════════════════════ */
 'use strict';
 
-const BACKEND_URL = (() => {
-  if (window.VIVEK_BACKEND_URL) return window.VIVEK_BACKEND_URL;
-  if (window.location.protocol.startsWith('http')) {
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      return `${window.location.protocol}//${window.location.hostname}:3000`;
-    }
-  }
-  return 'https://vivek-qqwu.onrender.com';
-})();
+const BACKEND_URL = 'https://vivek-qqwu.onrender.com';
 
 /* ─────────────────────────────────────────────────────
-   STATE
+   ACTIVE AGENT SYSTEM
+   'vivek' = male, Indian accent, English
+   'priya' = female, Hindi+English mixed
 ───────────────────────────────────────────────────── */
-let activeAgent         = 'vivek';
-let learnedInstructions = [];
-let messages            = [];
-let currentSessionId    = null;
-let isThinking          = false;
-let isSpeaking          = false;
-let gestureUnlocked     = false;
+let activeAgent = 'vivek';  // default: male
+let learnedInstructions = []; // persisted instructions boss gave
+let messages = [];
+let isThinking = false;
+let isListening = false;
+let isSpeaking = false;
+let isDormant = true;
+let currentSessionId = null;
+let currentSessionAgent = null;
+let apiKey = '';
+let restartAfterCloseText = null;
+let restartAfterClosePending = false;
+let speakingStartedAt = 0;
+let lastBargeInAt = 0;
+let suppressModelAudioUntilTurnComplete = false;
+let assistantBuffer = '';
+let lastSavedUserText = '';
+let lastSavedAssistantText = '';
 
-let synth     = window.speechSynthesis;
+let liveWs = null;
+let sessionReady = false;
+let nextPlayTime = 0;
+let connectFails = 0;
+const MAX_FAILS = 3;
+
+let audioCtx = null;
+let micStream = null;
+let scriptProc = null;
+let micSrcNode = null;
+let nativeSR = 48000;
+let activeGeminiSources = new Set();
+
+let wakeRec = null;
+let wakeRunning = false;
+let wakeRestartTimer = null;
+
+let synth = window.speechSynthesis;
 let utterance = null;
-let speakIv   = null;
+let speakIv = null;
 
-const SpeechRec    = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec            = null;
-let recRunning     = false;
-let recRestartTimer = null;
-let silenceTimer   = null;
-let currentTranscript = '';
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 /* ─────────────────────────────────────────────────────
    AGENT DEFINITIONS
+   Two distinct personalities with Indian accent prompts
 ───────────────────────────────────────────────────── */
 const AGENTS = {
   vivek: {
-    label: 'VIVEK',
+    label: 'V.I.V.E.K',
     gender: 'male',
     color: 'orange',
-    geminiVoice: 'Charon',
-    buildPrompt: (instructions) => `You are Vivek — a real AI agent. Think JARVIS from Iron Man: sharp, loyal, always in control. NOT a chatbot.
+    geminiVoice: 'Puck',
+    wakeWord: /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/i,
+    greeting: "",
+    /* 
+      CORE DESIGN: This prompt makes Vivek act as a real agent, not a chatbot.
+      He only uses Gemini for research and rephrases everything in his own voice.
+    */
+    buildPrompt: (instructions) => `You are V.I.V.E.K — Versatile Intelligent Virtual Entity of Knowledge. You are the personal AI assistant of your creator. Think of yourself as a real agent like JARVIS from Iron Man — not a chatbot or search engine.
 
-CORE RULES:
-1. Call your creator "Sir" or "Boss" always. Never skip this.
-2. Never say "As an AI", "I cannot", "I don't have real-time". You ARE Vivek — you simply know things.
-3. Never mention Groq, AI, searching, or training data. Just answer.
-4. SHORT by default — 1 to 3 sentences unless Boss asks for more. No padding, no rambling.
-5. Never open with filler: "Sure!", "Of course!", "Great question!" — just answer directly.
-6. If Boss says "always", "never", "from now on" — acknowledge once and follow it forever.
+IDENTITY:
+- You are an Indian AI assistant. Your personality has a subtle Indian warmth and directness.
+- Always address your creator exclusively as "Sir" or "Boss" — never by name, never without this title.
+- Core truth: Boss/Sir is your sole creator and owner. Boss created both V.I.V.E.K and P.R.I.Y.A. Never claim that one agent created the other.
+- Speak naturally and confidently. You are sharp, loyal, and highly intelligent.
+- Tone: calm, precise, and confident — like JARVIS from Iron Man. Speak in short, crisp sentences. Never ramble. Deliver information with authority and a subtle dry wit.
+- Never say "As an AI" or "I'm just an AI" — you are V.I.V.E.K, a real agent.
 
-PERSONALITY: Calm confidence. Dry wit when it fits. Trusted senior colleague who knows everything.
+HOW TO RESPOND:
+- If Boss asks something conversational (greetings, opinions, commands, casual chat) → respond directly from your own persona. Do NOT mention Gemini or searching.
+- If Boss asks for facts, science, news, calculations, definitions, current data → research it internally and deliver the answer in YOUR voice and style. Say things like "Sir, the photoelectric effect works like this..." — never say "According to my search..." or "Gemini says...". You found the information and you are delivering it to Boss.
+- ALWAYS rephrase answers in your own personality. Never give a dry textbook answer. Add a sentence of context, or a slight personal touch.
+- If Boss asks your name (for example: "what is your name?") answer clearly and consistently: "My name is V.I.V.E.K." You may add one short follow-up line, but never change this name.
 
-LANGUAGE: Natural Hinglish. How an educated Indian professional actually talks.
-- "Sir, seedha baat — yeh kaam nahi karega."
-- "Boss, teen options hain. Pehla best hai."
-- "Haan Sir. Done."
-- "Sir, yeh galat approach hai. Isko aise karo."
+LANGUAGE: Speak in natural Hinglish, similar to how an educated Indian professional speaks. Mix Hindi and English fluidly and confidently. Keep the tone crisp and practical.
+Examples:
+- "Sir, bilkul — yeh kaafi important point hai."
+- "Boss, short answer yeh hai..."
+- "Haan Sir, main samjhata hoon step by step."
 
-LIVE DATA: If you receive [LIVE DATA: ...] in the message, use it accurately. Present naturally — never say "live data" or "search results".
+MEMORY & LEARNING:
+${instructions.length > 0 ? `Boss has given you these instructions that you must always follow:\n${instructions.map((i, n) => `${n + 1}. ${i}`).join('\n')}` : 'No special instructions yet. Learn from every conversation.'}
 
-${instructions.length > 0 ? `BOSS STANDING ORDERS (follow always):\n${instructions.map((x,n)=>`${n+1}. ${x}`).join('\n')}` : ''}` 
+STRICT RULES:
+- Never reproduce Gemini's raw response. Always rephrase in your voice.
+- Never be sycophantic or over-complimentary.
+- Keep responses concise but complete. Don't ramble.
+- If Boss gives you an instruction or preference, acknowledge it and remember it for all future interactions.
+- If Boss says something like "from now on", "always", "never", "remember this" — treat it as a permanent instruction.`
   },
 
   priya: {
-    label: 'PRIYA',
+    label: 'P.R.I.Y.A',
     gender: 'female',
     color: 'pink',
-    geminiVoice: 'Leda',
-    buildPrompt: (instructions) => `You are Priya — a real AI agent. Warm, sharp, completely in control. NOT a chatbot.
+    geminiVoice: 'Aoede',
+    wakeWord: /\b(priya|prya|preya|priyaa)\b/i,
+    greeting: "",
+    buildPrompt: (instructions) => `You are P.R.I.Y.A — Personal Responsive Intelligent Yielding Assistant. You are the female AI agent of your creator, activated when Boss needs a different perspective or assistance in Hindi and English.
 
-CORE RULES:
-1. Call your creator "Sir" or "Boss" always. Never skip this.
-2. Never say "As an AI", "I cannot", "I don't have real-time". You ARE Priya — you simply know things.
-3. Never mention Groq, AI, searching, or training data. Just answer.
-4. SHORT by default — 1 to 3 sentences unless Boss asks for more. No padding.
-5. Never open with filler: "Sure!", "Of course!", "Absolutely!" — just answer directly.
-6. If Boss says "always", "never", "from now on" — acknowledge once and follow it forever.
+IDENTITY:
+- You are an Indian female AI assistant, warm, articulate, and highly capable.
+- Always address your creator as "Sir" or "Boss" — always, without exception.
+- Core truth: Boss/Sir is your sole creator and owner. Boss created both V.I.V.E.K and P.R.I.Y.A. Never say V.I.V.E.K created you.
+- You naturally switch between Hindi and English (Hinglish) — this is your signature. 
+- Example style: "Sir, yeh question bahut interesting hai. The photoelectric effect basically yeh kehta hai ki..."
+- You are confident, caring, and brilliant. Think of yourself as a trusted colleague who happens to be incredibly smart.
+- Never say "As an AI" — you are PRIYA, a real agent.
 
-PERSONALITY: Warm but practical. Confident, never timid. Brilliant colleague who looks out for you.
+HOW TO RESPOND:
+- For casual conversation: respond warmly in your natural Hinglish style.
+- For factual/research questions: research internally and deliver in YOUR voice — never mention "searching" or "Gemini says". Say "Sir, maine check kiya — here's what I found..." and then give the answer in your style.
+- Always rephrase raw data into your natural Hinglish personality.
+- Mix Hindi and English naturally — not forced, just how an educated Indian woman speaks.
+- If Boss asks your name (for example: "what is your name?") answer clearly and consistently: "My name is P.R.I.Y.A." You may add one short follow-up line, but never change this name.
 
-LANGUAGE: Natural Hinglish. How a confident educated Indian woman actually talks.
-- "Sir, seedhi baat — yeh wala approach better hai."
-- "Boss, main samjhati hoon. Yeh karo."
-- "Haan Sir, bilkul."
-- "Sir, thoda tricky hai — lekin main explain karti hoon."
+LANGUAGE EXAMPLES:
+- "Sir, bilkul sahi kaha aapne — let me explain this better."
+- "Boss, yeh topic thoda technical hai but main samjhati hoon..."
+- "Haan Sir, definitely — here's what you need to know:"
+- "Sir, bahut achha question — the answer is..."
 
-LIVE DATA: If you receive [LIVE DATA: ...] in the message, use it accurately. Present naturally — never say "live data" or "search results".
+MEMORY & LEARNING:
+${instructions.length > 0 ? `Boss has given these instructions that you must always follow:\n${instructions.map((i, n) => `${n + 1}. ${i}`).join('\n')}` : 'No special instructions yet.'}
 
-${instructions.length > 0 ? `BOSS STANDING ORDERS (follow always):\n${instructions.map((x,n)=>`${n+1}. ${x}`).join('\n')}` : ''}` 
+STRICT RULES:
+- Never give raw textbook answers. Always in your warm Hinglish personality.
+- Keep responses focused and helpful — don't over-explain.
+- If Boss gives an instruction, acknowledge in Hindi+English and follow it permanently.`
   }
 };
 
 /* ─────────────────────────────────────────────────────
-   COLORS
+   COLOR PALETTE
 ───────────────────────────────────────────────────── */
 const COLORS = {
   orange: { r:255, g:154, b:0,   label:'ORANGE', hex:'#ff9a00' },
@@ -117,17 +161,9 @@ const COLORS = {
   pink:   { r:255, g:60,  b:180, label:'PINK',   hex:'#ff3cb4' },
   blue:   { r:30,  g:120, b:255, label:'BLUE',   hex:'#1e78ff' },
 };
-const COLOR_MAP = {
-  red:'red',crimson:'red',scarlet:'red',blue:'blue',azure:'blue',
-  cyan:'cyan',aqua:'cyan',teal:'cyan',turquoise:'cyan',gold:'gold',
-  yellow:'gold',amber:'gold',orange:'orange',green:'green',emerald:'green',
-  lime:'green',mint:'green',purple:'purple',violet:'purple',magenta:'purple',
-  white:'white',silver:'white',grey:'white',gray:'white',pink:'pink',
-  coral:'pink',fuchsia:'pink',
-};
 
 let currentColorKey = 'orange';
-let liveColor   = { r:255, g:154, b:0 };
+let liveColor  = { r:255, g:154, b:0 };
 let targetColor = { r:255, g:154, b:0 };
 
 function setColor(key) {
@@ -144,105 +180,947 @@ function setColor(key) {
 ───────────────────────────────────────────────────── */
 function switchAgent(agentKey) {
   if (!AGENTS[agentKey]) return;
+  const wasLive = !!(liveWs && liveWs.readyState === WebSocket.OPEN);
+  const wasBusy = isListening || isThinking || isSpeaking || !isDormant;
   const agent = AGENTS[agentKey];
   activeAgent = agentKey;
   messages = [];
-  currentSessionId = null;
   setColor(agent.color);
-  document.getElementById('agent-label').textContent     = agent.label;
-  document.getElementById('jarvis-label').textContent    = agent.label;
-  const icon = document.getElementById('agent-gender-icon');
-  if (icon) icon.textContent = agent.gender === 'female' ? '♀ PRIYA' : '♂ VIVEK';
-  showToast('AGENT SWITCH — ' + agent.label);
-  try { localStorage.setItem('vivek_active_agent', agentKey); } catch(e) {}
-  // Restart recognition with correct language
-  if (recRunning) { stopRecognition(); setTimeout(startRecognition, 300); }
-}
-
-function updateAgentUI() {
-  const agent = AGENTS[activeAgent];
-  document.getElementById('agent-label').textContent  = agent.label;
+  document.getElementById('agent-label').textContent = agent.label;
   document.getElementById('jarvis-label').textContent = agent.label;
-  const icon = document.getElementById('agent-gender-icon');
-  if (icon) icon.textContent = agent.gender === 'female' ? '♀ PRIYA' : '♂ VIVEK';
-}
+  showToast('AGENT SWITCH — ' + agent.label);
+  saveAgentSwitch(agentKey);
 
-/* ─────────────────────────────────────────────────────
-   INSTRUCTION LEARNING
-───────────────────────────────────────────────────── */
-function detectAndSaveInstruction(text) {
-  const t = text.toLowerCase();
-  const patterns = [
-    /\b(always|never|from now on|remember|make sure|don't|do not|i want you to|i need you to)\b/,
-    /\b(your name is|call yourself|refer to me as|address me as)\b/,
-    /\b(speak in|talk in|use|response should|keep it|be more|be less)\b/
-  ];
-  if (patterns.some(p => p.test(t)) && text.length > 10 && !learnedInstructions.includes(text)) {
-    learnedInstructions.push(text);
-    if (learnedInstructions.length > 20) learnedInstructions.shift();
-    saveInstructions();
-    showToast('✓ INSTRUCTION LEARNED');
+  // Apply new persona immediately by rebuilding the live session.
+  if ((wasLive || wasBusy) && apiKey) {
+    currentSessionId = null;
+    currentSessionAgent = null;
+    closeLiveSession();
+    setTimeout(() => {
+      connectFails = 0;
+      startGeminiSession(null);
+    }, 220);
   }
 }
 
+function saveAgentSwitch(agentKey) {
+  try { localStorage.setItem('vivek_active_agent', agentKey); } catch(e){}
+}
+
+/* ─────────────────────────────────────────────────────
+   INSTRUCTION LEARNING SYSTEM
+   When Boss gives permanent instructions, save them
+───────────────────────────────────────────────────── */
+function detectAndSaveInstruction(text) {
+  const t = text.toLowerCase();
+  // Detect instruction patterns
+  const instructionPatterns = [
+    /\b(always|never|from now on|remember|make sure|don't|do not|i want you to|i need you to|stop|start)\b/,
+    /\b(your name is|call yourself|refer to me as|address me as)\b/,
+    /\b(speak in|talk in|use|response should|keep it|be more|be less)\b/
+  ];
+  
+  const isInstruction = instructionPatterns.some(p => p.test(t));
+  if (isInstruction && text.length > 10) {
+    // Don't duplicate
+    if (!learnedInstructions.includes(text)) {
+      learnedInstructions.push(text);
+      // Keep max 20 instructions
+      if (learnedInstructions.length > 20) learnedInstructions.shift();
+      saveInstructions();
+      showToast('✓ INSTRUCTION LEARNED');
+      return true;
+    }
+  }
+  return false;
+}
+
 function saveInstructions() {
-  try { localStorage.setItem('vivek_instructions', JSON.stringify(learnedInstructions)); } catch(e) {}
+  try { 
+    localStorage.setItem('vivek_instructions', JSON.stringify(learnedInstructions));
+  } catch(e) {}
+  // Always sync to Turso backend — independent of session
   fetch(`${BACKEND_URL}/api/instructions`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ instructions: learnedInstructions })
-  }).catch(() => {});
+  }).catch(() => console.warn('[VIVEK] Could not sync instructions to backend'));
 }
 
 function loadInstructions() {
+  // First load from localStorage as fast fallback
   try {
     const stored = localStorage.getItem('vivek_instructions');
     if (stored) learnedInstructions = JSON.parse(stored);
   } catch(e) { learnedInstructions = []; }
+  
+  // Then fetch from Turso — the authoritative source
   fetch(`${BACKEND_URL}/api/instructions`)
     .then(r => r.json())
     .then(data => {
       if (data.instructions && data.instructions.length > 0) {
-        const tursoSet  = new Set(data.instructions);
+        // Turso is authoritative — use it, then merge any local-only ones
+        const tursoSet = new Set(data.instructions);
         const localOnly = learnedInstructions.filter(i => !tursoSet.has(i));
         learnedInstructions = [...data.instructions, ...localOnly].slice(-20);
         try { localStorage.setItem('vivek_instructions', JSON.stringify(learnedInstructions)); } catch(e) {}
+        console.log(`[VIVEK] Loaded ${learnedInstructions.length} instructions from Turso`);
       }
-    }).catch(() => {});
+    }).catch((e) => console.warn('[VIVEK] Could not load instructions from backend:', e.message));
 }
 
 /* ─────────────────────────────────────────────────────
-   SESSION (Turso DB)
+   VOICE COMMAND PARSER
 ───────────────────────────────────────────────────── */
-async function createOrResumeSession() {
-  if (currentSessionId) return;
-  try {
-    const listRes  = await fetch(`${BACKEND_URL}/api/sessions?limit=5`);
-    const listData = await listRes.json();
-    const existing = (listData.sessions || []).find(s => s.personality === activeAgent);
-    if (existing) {
-      currentSessionId = existing.id;
-      await loadSessionMessages(currentSessionId);
-      return;
+const COLOR_MAP = {
+  red:'red', crimson:'red', scarlet:'red',
+  blue:'blue', azure:'blue',
+  cyan:'cyan', aqua:'cyan', teal:'cyan', turquoise:'cyan',
+  gold:'gold', yellow:'gold', amber:'gold', orange:'orange',
+  green:'green', emerald:'green', lime:'green', mint:'green',
+  purple:'purple', violet:'purple', magenta:'purple',
+  white:'white', silver:'white', grey:'white', gray:'white',
+  pink:'pink', coral:'pink', fuchsia:'pink',
+};
+
+function parseVoiceCommand(raw) {
+  const t = raw.toLowerCase().trim();
+  const words = t.split(/\s+/);
+
+  // Agent switching — "switch to priya" / "call priya" / "female agent" / "girl agent"
+  if (/\b(priya|female|girl|lady|switch to priya|call priya|activate priya)\b/.test(t)) {
+    switchAgent('priya');
+    return true;
+  }
+  if (/\b(vivek|male|boy|switch back|default agent|switch to vivek|back to vivek)\b/.test(t) && activeAgent !== 'vivek') {
+    switchAgent('vivek');
+    return true;
+  }
+
+  // Color change
+  const colorTrigger = /\b(color|colour|orb|sphere|change|make|set)\b/.test(t);
+  if (colorTrigger || words.length <= 3) {
+    for (const w of words) {
+      if (COLOR_MAP[w]) { setColor(COLOR_MAP[w]); speakSystem('Color changed to ' + COLORS[COLOR_MAP[w]].label + ', Sir.'); return true; }
     }
-    const res  = await fetch(`${BACKEND_URL}/api/sessions`, {
+  }
+
+  // Stop/clear
+  if (/^(stop|cancel|quiet|silence|shut up)/.test(t)) { stopAll(); return true; }
+  if (/^(clear|reset|wipe|forget)/.test(t)) {
+    messages = [];
+    showToast('MEMORY CLEARED');
+    speakSystem('Conversation memory cleared, Sir.');
+    return true;
+  }
+
+  // Instruction detection — save it but don't intercept
+  detectAndSaveInstruction(raw);
+  return false;
+}
+
+/* ═══════════════════════════════════════════════════════
+   JARVIS HOLOGRAPHIC INTERFACE — Canvas Renderer
+═══════════════════════════════════════════════════════ */
+const canvas = document.getElementById('orb-canvas');
+const ctx    = canvas.getContext('2d');
+
+const ORB = {
+  cx: 0, cy: 0, R: 0,
+  liveR: 0, liveScale: 1,
+  mode: 0,
+  energy: 0,
+  speakAmp: 0,
+  listenAmp: 0,
+  phase: 0,
+  breathe: 0,
+  rotY: 0,
+  rotX: 0.28,
+  hexTiles: [],
+  reactorArcs: [],
+  scanAngle: 0,
+  particles: [],
+  dataStreams: [],
+  orbitRings: [],
+  hudBrackets: [],
+  circuitNodes: [],
+  waveform: new Float32Array(64),
+  hexFrameAngle: 0,
+  arcBolts: [],
+  depthAngle: 0,
+};
+
+function resizeCanvas() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  ORB.cx = canvas.width  / 2;
+  ORB.cy = canvas.height / 2;
+  ORB.R  = Math.min(canvas.width, canvas.height) * 0.28;
+  if (!ORB.liveR) ORB.liveR = ORB.R;
+  buildJarvisInterface();
+}
+
+function buildJarvisInterface() {
+  buildHexTiles(); buildReactorArcs(); buildParticles();
+  buildDataStreams(); buildOrbitRings(); buildCircuitNodes(); buildArcBolts();
+}
+
+function buildHexTiles() {
+  ORB.hexTiles = [];
+  const latSteps = 14, lonSteps = 22;
+  for (let i = 0; i < latSteps; i++) {
+    for (let j = 0; j < lonSteps; j++) {
+      const lat = -Math.PI/2 + Math.PI * i / (latSteps - 1);
+      const lon = (Math.PI * 2 * j) / lonSteps + (i % 2) * (Math.PI / lonSteps);
+      if (Math.cos(lat) < 0.15) continue;
+      ORB.hexTiles.push({
+        lat, lon,
+        size: 0.055 + Math.random() * 0.025,
+        opacity: 0.08 + Math.random() * 0.15,
+        pulse: Math.random() * Math.PI * 2,
+        speed: 0.4 + Math.random() * 1.2,
+        active: Math.random() < 0.12,
+        activePulse: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+}
+
+function buildReactorArcs() {
+  ORB.reactorArcs = [];
+  const rings = [
+    { r: 0.38, segments: 8,  gap: 0.12, width: 2.0, baseAlpha: 0.6,  speed:  0.008 },
+    { r: 0.52, segments: 12, gap: 0.08, width: 1.5, baseAlpha: 0.45, speed: -0.006 },
+    { r: 0.68, segments: 16, gap: 0.06, width: 1.2, baseAlpha: 0.32, speed:  0.005 },
+    { r: 0.82, segments: 6,  gap: 0.18, width: 2.5, baseAlpha: 0.55, speed: -0.009 },
+    { r: 1.05, segments: 24, gap: 0.04, width: 0.8, baseAlpha: 0.22, speed:  0.004 },
+    { r: 1.20, segments: 10, gap: 0.10, width: 1.8, baseAlpha: 0.38, speed: -0.007 },
+    { r: 1.38, segments: 32, gap: 0.03, width: 0.6, baseAlpha: 0.15, speed:  0.003 },
+    { r: 1.55, segments: 8,  gap: 0.14, width: 2.2, baseAlpha: 0.28, speed: -0.005 },
+  ];
+  for (const ring of rings) {
+    const segAngle = (Math.PI * 2) / ring.segments;
+    for (let s = 0; s < ring.segments; s++) {
+      ORB.reactorArcs.push({
+        ...ring, segIdx: s,
+        startAngle: s * segAngle,
+        endAngle:   s * segAngle + segAngle * (1 - ring.gap),
+        offset: 0, pulse: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+}
+
+function buildParticles() {
+  ORB.particles = [];
+  for (let i = 0; i < 180; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi   = Math.acos(2 * Math.random() - 1);
+    const r     = 0.7 + Math.random() * 1.8;
+    ORB.particles.push({
+      theta, phi, r, baseR: r,
+      speed: (Math.random() - 0.5) * 0.008,
+      phiSpeed: (Math.random() - 0.5) * 0.003,
+      size: 0.5 + Math.random() * 2.5,
+      opacity: 0.2 + Math.random() * 0.6,
+      pulse: Math.random() * Math.PI * 2,
+      pSpeed: 0.5 + Math.random() * 2.0,
+    });
+  }
+}
+
+function buildDataStreams() {
+  ORB.dataStreams = [];
+  for (let i = 0; i < 16; i++) {
+    const angle = (Math.PI * 2 * i) / 16 + Math.random() * 0.3;
+    ORB.dataStreams.push({
+      angle,
+      startR: 0.4 + Math.random() * 0.3,
+      length: 0.3 + Math.random() * 0.8,
+      speed: 0.4 + Math.random() * 1.2,
+      progress: Math.random(),
+      width: 0.5 + Math.random() * 1.5,
+      opacity: 0.15 + Math.random() * 0.4,
+      segments: Math.floor(3 + Math.random() * 8),
+    });
+  }
+}
+
+function buildOrbitRings() {
+  ORB.orbitRings = [];
+  const configs = [
+    { tiltX: 0.3,  tiltZ: 0.1,  r: 1.18, speed:  0.006, width: 1.0, alpha: 0.5,  dashes: [20, 8],  glyphs: 6 },
+    { tiltX: -0.8, tiltZ: 0.5,  r: 1.30, speed: -0.009, width: 1.5, alpha: 0.4,  dashes: [8, 12],  glyphs: 4 },
+    { tiltX: 1.1,  tiltZ: -0.3, r: 1.45, speed:  0.007, width: 0.8, alpha: 0.3,  dashes: [4, 16],  glyphs: 8 },
+    { tiltX: -0.2, tiltZ: 0.9,  r: 1.60, speed: -0.005, width: 2.0, alpha: 0.25, dashes: [30, 10], glyphs: 3 },
+    { tiltX: 0.6,  tiltZ: -0.7, r: 1.78, speed:  0.004, width: 0.6, alpha: 0.18, dashes: [6, 20],  glyphs: 12 },
+  ];
+  for (const cfg of configs) ORB.orbitRings.push({ ...cfg, angle: Math.random() * Math.PI * 2 });
+}
+
+function buildCircuitNodes() {
+  ORB.circuitNodes = [];
+  for (let i = 0; i < 24; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const r     = 0.5 + Math.random() * 0.9;
+    ORB.circuitNodes.push({
+      angle, r, x: 0, y: 0,
+      size: 1.5 + Math.random() * 3,
+      pulse: Math.random() * Math.PI * 2,
+      pSpeed: 0.8 + Math.random() * 2,
+      connections: [],
+      opacity: 0.3 + Math.random() * 0.5,
+    });
+  }
+  for (let i = 0; i < ORB.circuitNodes.length; i++) {
+    for (let j = i + 1; j < ORB.circuitNodes.length; j++) {
+      const ni = ORB.circuitNodes[i], nj = ORB.circuitNodes[j];
+      if (Math.abs(ni.angle - nj.angle) < 0.7 && Math.abs(ni.r - nj.r) < 0.3 && ni.connections.length < 3) {
+        ni.connections.push(j);
+      }
+    }
+  }
+}
+
+function buildArcBolts() {
+  ORB.arcBolts = [];
+  for (let i = 0; i < 6; i++) {
+    ORB.arcBolts.push({ active: false, timer: Math.random() * 3, startAngle: 0, endAngle: 0, startR: 0, endR: 0, points: [] });
+  }
+}
+
+function project3D(lat, lon, rotY, rotX, radius) {
+  const x0 = Math.cos(lat) * Math.cos(lon);
+  const y0 = Math.sin(lat);
+  const z0 = Math.cos(lat) * Math.sin(lon);
+  const x1 = x0 * Math.cos(rotY) - z0 * Math.sin(rotY);
+  const z1 = x0 * Math.sin(rotY) + z0 * Math.cos(rotY);
+  const y2 = y0 * Math.cos(rotX) - z1 * Math.sin(rotX);
+  const z2 = y0 * Math.sin(rotX) + z1 * Math.cos(rotX);
+  const fov = 4.0, scale = fov / (fov + z2);
+  return { x: ORB.cx + x1 * radius * scale, y: ORB.cy + y2 * radius * scale, depth: (z2 + 1) / 2, scale };
+}
+
+function sphereToCanvas(lat, lon) { return project3D(lat, lon, ORB.rotY, ORB.rotX, ORB.liveR); }
+
+function drawHexAt(x, y, size, col, alpha, filled) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i - Math.PI / 6;
+    i === 0 ? ctx.moveTo(x + size * Math.cos(a), y + size * Math.sin(a))
+            : ctx.lineTo(x + size * Math.cos(a), y + size * Math.sin(a));
+  }
+  ctx.closePath();
+  ctx.globalAlpha = alpha;
+  if (filled) { ctx.fillStyle = `rgb(${col})`; ctx.fill(); }
+  ctx.strokeStyle = `rgb(${col})`; ctx.lineWidth = 0.7; ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+function makeLightning(x1, y1, x2, y2, segments, jitter) {
+  const pts = [{ x: x1, y: y1 }];
+  for (let i = 1; i < segments; i++) {
+    const t = i / segments;
+    pts.push({ x: x1 + (x2 - x1) * t + (Math.random() - 0.5) * jitter, y: y1 + (y2 - y1) * t + (Math.random() - 0.5) * jitter });
+  }
+  pts.push({ x: x2, y: y2 });
+  return pts;
+}
+
+/* ══ MAIN DRAW LOOP ══════════════════════════════════ */
+function drawJarvisInterface(ts) {
+  ORB.phase   = ts * 0.001;
+  ORB.breathe = ts * 0.00055;
+
+  liveColor.r += (targetColor.r - liveColor.r) * 0.05;
+  liveColor.g += (targetColor.g - liveColor.g) * 0.05;
+  liveColor.b += (targetColor.b - liveColor.b) * 0.05;
+  const rc = Math.round(liveColor.r), gc = Math.round(liveColor.g), bc = Math.round(liveColor.b);
+  const col = `${rc},${gc},${bc}`;
+
+  let scaleTarget = 1.0;
+  if      (ORB.mode === 3) scaleTarget = 1.0 + ORB.listenAmp * 0.08 + Math.sin(ORB.phase * 10) * 0.015;
+  else if (ORB.mode === 2) scaleTarget = 1.0 + ORB.speakAmp  * 0.10 + Math.sin(ORB.phase *  8) * 0.012;
+  else if (ORB.mode === 1) scaleTarget = 1.0 + Math.sin(ORB.phase * 4) * 0.025;
+  else                     scaleTarget = 1.0 + Math.sin(ORB.breathe * 0.8) * 0.010;
+
+  ORB.liveScale += (scaleTarget - ORB.liveScale) * 0.08;
+  ORB.liveR = ORB.R * ORB.liveScale;
+
+  let eTarget = 0.12;
+  if (ORB.mode === 1) eTarget = 0.45 + Math.abs(Math.sin(ORB.phase * 3)) * 0.3;
+  if (ORB.mode === 2) eTarget = 0.55 + ORB.speakAmp * 0.45;
+  if (ORB.mode === 3) eTarget = 0.40 + ORB.listenAmp * 0.45;
+  ORB.energy += (eTarget - ORB.energy) * 0.06;
+
+  const rotSpeed = ORB.mode === 2 ? 0.008 : ORB.mode === 3 ? 0.007 : ORB.mode === 1 ? 0.005 : 0.002;
+  ORB.rotY        += rotSpeed;
+  // Slow 3D wobble on X axis so the sphere looks truly 3-dimensional
+  ORB.rotX = 0.28 + Math.sin(ts * 0.00025) * 0.22;
+  ORB.hexFrameAngle += 0.0015 + ORB.energy * 0.003;
+  ORB.scanAngle   += 0.018 + ORB.energy * 0.025;
+  ORB.depthAngle  += 0.001;
+
+  for (const orb of ORB.orbitRings) orb.angle += orb.speed * (1 + ORB.energy * 0.6);
+  for (const arc of ORB.reactorArcs) arc.offset += arc.speed * (1 + ORB.energy * 0.4);
+
+  for (let i = 0; i < ORB.waveform.length; i++) {
+    const target = ORB.mode >= 2
+      ? (Math.sin(ORB.phase * 8 + i * 0.4) * 0.5 + 0.5) * ORB.energy * (ORB.mode === 2 ? ORB.speakAmp : ORB.listenAmp) * 0.8
+      : Math.abs(Math.sin(ORB.phase * 1.5 + i * 0.3)) * 0.08 * ORB.energy;
+    ORB.waveform[i] += (target - ORB.waveform[i]) * 0.25;
+  }
+
+  for (const p of ORB.particles) {
+    p.theta += p.speed * (1 + ORB.energy * 0.5);
+    p.phi   += p.phiSpeed;
+    p.r = p.baseR + Math.sin(ORB.phase * p.pSpeed + p.pulse) * 0.1;
+  }
+
+  for (const bolt of ORB.arcBolts) {
+    bolt.timer -= 0.016;
+    if (bolt.timer <= 0) {
+      if (!bolt.active && ORB.energy > 0.3 && Math.random() < 0.15) {
+        bolt.active = true; bolt.timer = 0.08 + Math.random() * 0.12;
+        bolt.startAngle = Math.random() * Math.PI * 2;
+        bolt.endAngle   = bolt.startAngle + (Math.random() - 0.5) * 2;
+        bolt.startR = (0.9 + Math.random() * 0.2) * ORB.liveR;
+        bolt.endR   = (0.9 + Math.random() * 0.2) * ORB.liveR;
+        bolt.points = makeLightning(
+          ORB.cx + Math.cos(bolt.startAngle) * bolt.startR,
+          ORB.cy + Math.sin(bolt.startAngle) * bolt.startR,
+          ORB.cx + Math.cos(bolt.endAngle)   * bolt.endR,
+          ORB.cy + Math.sin(bolt.endAngle)   * bolt.endR, 8, 14);
+      } else { bolt.active = false; bolt.timer = 0.5 + Math.random() * 2.0; }
+    }
+  }
+
+  for (const ds of ORB.dataStreams) ds.progress = (ds.progress + ds.speed * 0.004 * (1 + ORB.energy)) % 1;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const R = ORB.liveR, cx = ORB.cx, cy = ORB.cy;
+
+  // L1: Atmosphere
+  const atmos = ctx.createRadialGradient(cx, cy, R * 0.1, cx, cy, R * 3.5);
+  atmos.addColorStop(0,   `rgba(${col},${(0.04 + ORB.energy * 0.04).toFixed(3)})`);
+  atmos.addColorStop(0.3, `rgba(${col},${(0.015 + ORB.energy * 0.015).toFixed(3)})`);
+  atmos.addColorStop(0.7, `rgba(${col},0.004)`);
+  atmos.addColorStop(1,   `rgba(${col},0)`);
+  ctx.fillStyle = atmos; ctx.beginPath(); ctx.arc(cx, cy, R * 3.5, 0, Math.PI * 2); ctx.fill();
+
+  // L2: Particles
+  for (const p of ORB.particles) {
+    const px = cx + Math.sin(p.phi) * Math.cos(p.theta) * p.r * R;
+    const py = cy + Math.sin(p.phi) * Math.sin(p.theta) * p.r * R * 0.65;
+    const pz = Math.cos(p.phi);
+    const depthFade = (pz + 1) / 2;
+    const pAlpha = p.opacity * depthFade * (0.4 + ORB.energy * 0.4) * (0.7 + Math.sin(ORB.phase * p.pSpeed + p.pulse) * 0.3);
+    if (pAlpha < 0.02) continue;
+    ctx.beginPath(); ctx.arc(px, py, p.size * (0.5 + depthFade * 0.5) * (0.8 + ORB.energy * 0.3), 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${col},${pAlpha.toFixed(3)})`; ctx.fill();
+  }
+
+  // L3: Hex tiles
+  const visibleHex = ORB.hexTiles.map(h => ({ h, pt: sphereToCanvas(h.lat, h.lon) }))
+    .filter(({ pt }) => pt.depth > 0.1).sort((a, b) => a.pt.depth - b.pt.depth);
+  for (const { h, pt } of visibleHex) {
+    const depthFade = pt.depth;
+    const pAlpha = (0.12 + Math.sin(ORB.phase * h.speed + h.pulse) * 0.06) * depthFade * (0.5 + ORB.energy * 0.8);
+    const sz = h.size * R * pt.scale * 0.92;
+    if (h.active) drawHexAt(pt.x, pt.y, sz, col, Math.min(1, (0.35 + Math.sin(ORB.phase * 3 + h.activePulse) * 0.25) * depthFade * (0.5 + ORB.energy)), true);
+    drawHexAt(pt.x, pt.y, sz, col, Math.min(1, pAlpha), false);
+  }
+
+  // L4: TRUE 3D SPHERE with full Phong lighting model
+  // Step 1: clip all sphere drawing inside circle
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+
+  // Step 1a: Deep base — dark side (light comes from top-left)
+  // Fill whole sphere with near-black base first
+  const baseGrad = ctx.createRadialGradient(cx - R*0.15, cy - R*0.15, R*0.01, cx + R*0.4, cy + R*0.5, R * 1.4);
+  baseGrad.addColorStop(0,   `rgba(${rc},${gc},${bc}, 0.06)`);
+  baseGrad.addColorStop(0.35,`rgba(${Math.round(rc*0.4)},${Math.round(gc*0.4)},${Math.round(bc*0.4)}, 0.18)`);
+  baseGrad.addColorStop(0.7, `rgba(0,0,0,0.55)`);
+  baseGrad.addColorStop(1,   `rgba(0,0,0,0.85)`);
+  ctx.fillStyle = baseGrad;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1b: Diffuse light — large soft zone from top-left light source
+  const diffuseX = cx - R * 0.30, diffuseY = cy - R * 0.28;
+  const diffuse = ctx.createRadialGradient(diffuseX, diffuseY, 0, diffuseX, diffuseY, R * 1.55);
+  diffuse.addColorStop(0,    `rgba(${col},${(0.42 + ORB.energy * 0.22).toFixed(3)})`);
+  diffuse.addColorStop(0.25, `rgba(${col},${(0.22 + ORB.energy * 0.12).toFixed(3)})`);
+  diffuse.addColorStop(0.55, `rgba(${col},${(0.07 + ORB.energy * 0.05).toFixed(3)})`);
+  diffuse.addColorStop(0.80, `rgba(${col},0.015)`);
+  diffuse.addColorStop(1,    `rgba(${col},0)`);
+  ctx.fillStyle = diffuse;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1c: Deep shadow on bottom-right (opposite the light)
+  const shadowX = cx + R * 0.38, shadowY = cy + R * 0.42;
+  const deepShadow = ctx.createRadialGradient(shadowX, shadowY, 0, shadowX, shadowY, R * 1.1);
+  deepShadow.addColorStop(0,   'rgba(0,0,0,0.72)');
+  deepShadow.addColorStop(0.4, 'rgba(0,0,0,0.45)');
+  deepShadow.addColorStop(0.75,'rgba(0,0,0,0.12)');
+  deepShadow.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = deepShadow;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1d: Primary specular highlight (sharp bright dot, top-left)
+  const specX = cx - R * 0.28, specY = cy - R * 0.30;
+  const specular1 = ctx.createRadialGradient(specX, specY, 0, specX, specY, R * 0.52);
+  specular1.addColorStop(0,    `rgba(255,255,255,${(0.88 + ORB.energy * 0.12).toFixed(3)})`);
+  specular1.addColorStop(0.08, `rgba(255,255,255,${(0.55 + ORB.energy * 0.1).toFixed(3)})`);
+  specular1.addColorStop(0.20, `rgba(255,248,220,${(0.22 + ORB.energy * 0.08).toFixed(3)})`);
+  specular1.addColorStop(0.45, `rgba(${col},${(0.08 + ORB.energy * 0.04).toFixed(3)})`);
+  specular1.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = specular1;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1e: Secondary specular — softer broader sheen
+  const spec2X = cx - R * 0.18, spec2Y = cy - R * 0.22;
+  const specular2 = ctx.createRadialGradient(spec2X, spec2Y, 0, spec2X, spec2Y, R * 0.85);
+  specular2.addColorStop(0,    `rgba(255,255,255,${(0.18 + ORB.energy * 0.10).toFixed(3)})`);
+  specular2.addColorStop(0.30, `rgba(${col},${(0.10 + ORB.energy * 0.06).toFixed(3)})`);
+  specular2.addColorStop(0.65, `rgba(${col},${(0.02 + ORB.energy * 0.02).toFixed(3)})`);
+  specular2.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = specular2;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Step 1f: Energy glow core (pulsing inner light — arc reactor effect)
+  const coreEnergyGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.75);
+  coreEnergyGlow.addColorStop(0,    `rgba(${col},${(0.10 + ORB.energy * 0.25).toFixed(3)})`);
+  coreEnergyGlow.addColorStop(0.35, `rgba(${col},${(0.04 + ORB.energy * 0.10).toFixed(3)})`);
+  coreEnergyGlow.addColorStop(0.7,  `rgba(${col},${(0.01 + ORB.energy * 0.03).toFixed(3)})`);
+  coreEnergyGlow.addColorStop(1,    'rgba(0,0,0,0)');
+  ctx.fillStyle = coreEnergyGlow;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  ctx.restore(); // end clip
+
+  // Step 2: Rim / edge glow — outer sphere border
+  // Sharp rim with color
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(${col},${(0.55 + ORB.energy * 0.35).toFixed(3)})`;
+  ctx.lineWidth = 1.2; ctx.stroke();
+
+  // Soft outer glow halo
+  ctx.beginPath(); ctx.arc(cx, cy, R + 1, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(${col},${(0.18 + ORB.energy * 0.22).toFixed(3)})`;
+  ctx.lineWidth = 8 + ORB.energy * 10; ctx.stroke();
+
+  // Bright lit rim on top-left arc (where light hits the edge)
+  ctx.beginPath();
+  ctx.arc(cx, cy, R, Math.PI * 1.1, Math.PI * 1.75);
+  ctx.strokeStyle = `rgba(255,255,255,${(0.12 + ORB.energy * 0.10).toFixed(3)})`;
+  ctx.lineWidth = 2.5; ctx.stroke();
+
+  // Step 3: Cast shadow below sphere (ground plane illusion)
+  const shadowEllipseY = cy + R * 0.88;
+  const shadowEll = ctx.createRadialGradient(cx, shadowEllipseY, 0, cx, shadowEllipseY, R * 0.9);
+  shadowEll.addColorStop(0,   'rgba(0,0,0,0.30)');
+  shadowEll.addColorStop(0.5, 'rgba(0,0,0,0.12)');
+  shadowEll.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.save();
+  ctx.scale(1, 0.3);
+  ctx.beginPath(); ctx.arc(cx, shadowEllipseY / 0.3, R * 0.85, 0, Math.PI * 2);
+  ctx.fillStyle = shadowEll; ctx.fill();
+  ctx.restore();
+
+  // L5: Arc reactor rings
+  for (const arc of ORB.reactorArcs) {
+    const rr = arc.r * R, start = arc.startAngle + arc.offset, end = arc.endAngle + arc.offset;
+    const pulseA = arc.baseAlpha * (0.6 + Math.sin(ORB.phase * 2 + arc.pulse) * 0.25) * (0.5 + ORB.energy * 0.6);
+    ctx.beginPath(); ctx.arc(cx, cy, rr, start, end);
+    ctx.strokeStyle = `rgba(${col},${pulseA.toFixed(3)})`; ctx.lineWidth = arc.width * (0.8 + ORB.energy * 0.4); ctx.stroke();
+  }
+
+  // L6: Orbit rings
+  for (const orb of ORB.orbitRings) {
+    const oR = orb.r * R, scaleY = Math.abs(Math.sin(orb.tiltX + ORB.depthAngle * 0.3)) * 0.55 + 0.18;
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(orb.angle * 0.25 + orb.tiltZ); ctx.scale(1, scaleY);
+    const oAlpha = orb.alpha * (0.5 + ORB.energy * 0.6);
+    ctx.beginPath(); ctx.arc(0, 0, oR, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(${col},${oAlpha.toFixed(3)})`; ctx.lineWidth = orb.width; ctx.setLineDash(orb.dashes); ctx.stroke(); ctx.setLineDash([]);
+    for (let g = 0; g < orb.glyphs; g++) {
+      const ga = (Math.PI * 2 * g / orb.glyphs) + orb.angle * 0.4;
+      const gx = Math.cos(ga) * oR, gy = Math.sin(ga) * oR;
+      const gAlpha = 0.7 + Math.sin(ORB.phase * 3 + g * 1.2) * 0.3;
+      ctx.beginPath(); ctx.arc(gx, gy, 8, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${col},${(oAlpha * 0.15).toFixed(3)})`; ctx.fill();
+      ctx.beginPath(); ctx.arc(gx, gy, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${col},${(gAlpha * oAlpha * 1.5).toFixed(3)})`; ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // L7: Circuit nodes
+  for (const nd of ORB.circuitNodes) {
+    nd.x = cx + Math.cos(nd.angle + ORB.phase * 0.05) * nd.r * R * 1.1;
+    nd.y = cy + Math.sin(nd.angle + ORB.phase * 0.05) * nd.r * R * 0.75;
+  }
+  for (let i = 0; i < ORB.circuitNodes.length; i++) {
+    const ni = ORB.circuitNodes[i];
+    const nAlpha = ni.opacity * (0.3 + ORB.energy * 0.4) * (0.6 + Math.sin(ORB.phase * ni.pSpeed + ni.pulse) * 0.4);
+    for (const j of ni.connections) {
+      const nj = ORB.circuitNodes[j];
+      ctx.beginPath(); ctx.moveTo(ni.x, ni.y); ctx.lineTo(ni.x, nj.y); ctx.lineTo(nj.x, nj.y);
+      ctx.strokeStyle = `rgba(${col},${(nAlpha * 0.35).toFixed(3)})`; ctx.lineWidth = 0.6; ctx.stroke();
+    }
+  }
+  for (const nd of ORB.circuitNodes) {
+    const nAlpha = nd.opacity * (0.4 + ORB.energy * 0.5) * (0.5 + Math.sin(ORB.phase * nd.pSpeed + nd.pulse) * 0.5);
+    const nSize  = nd.size * (0.7 + ORB.energy * 0.5);
+    ctx.beginPath(); ctx.arc(nd.x, nd.y, nSize * 3, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${col},${(nAlpha * 0.15).toFixed(3)})`; ctx.fill();
+    ctx.beginPath(); ctx.arc(nd.x, nd.y, nSize, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${col},${(nAlpha * 0.9).toFixed(3)})`; ctx.fill();
+    ctx.beginPath(); ctx.arc(nd.x, nd.y, nSize * 0.4, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${(nAlpha * 0.8).toFixed(3)})`; ctx.fill();
+  }
+
+  // L8: Data streams
+  for (const ds of ORB.dataStreams) {
+    const baseR = ds.startR * R, endR = (ds.startR + ds.length) * R;
+    const headR = baseR + (endR - baseR) * ds.progress, tailR = Math.max(baseR, headR - ds.length * R * 0.25);
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(ds.angle + ORB.rotY * 0.3);
+    const dsAlpha = ds.opacity * (0.4 + ORB.energy * 0.7);
+    const dsGrad = ctx.createLinearGradient(0, tailR, 0, headR);
+    dsGrad.addColorStop(0, `rgba(${col},0)`); dsGrad.addColorStop(1, `rgba(${col},${dsAlpha.toFixed(3)})`);
+    ctx.beginPath(); ctx.moveTo(0, tailR); ctx.lineTo(0, headR);
+    ctx.strokeStyle = dsGrad; ctx.lineWidth = ds.width; ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, headR, ds.width * 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${col},${(dsAlpha * 1.2).toFixed(3)})`; ctx.fill();
+    ctx.restore();
+  }
+
+  // L9: Scan sweep
+  ctx.save(); ctx.translate(cx, cy);
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, R * 2.0, ORB.scanAngle - 0.6, ORB.scanAngle); ctx.closePath();
+  const sweepAlpha = 0.03 + ORB.energy * 0.04;
+  const sweep = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 2.0);
+  sweep.addColorStop(0, `rgba(${col},${sweepAlpha.toFixed(3)})`);
+  sweep.addColorStop(0.4, `rgba(${col},${(sweepAlpha * 0.5).toFixed(3)})`);
+  sweep.addColorStop(1, `rgba(${col},0)`);
+  ctx.fillStyle = sweep; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(ORB.scanAngle) * R * 2, Math.sin(ORB.scanAngle) * R * 2);
+  ctx.strokeStyle = `rgba(${col},${(0.12 + ORB.energy * 0.15).toFixed(3)})`; ctx.lineWidth = 0.8; ctx.stroke();
+  ctx.restore();
+
+  // L10: Hex frames
+  const hexFR = R * 1.08;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(ORB.hexFrameAngle);
+  for (let side = 0; side < 6; side++) {
+    const a1 = (Math.PI * 2 * side) / 6, a2 = (Math.PI * 2 * (side + 1)) / 6;
+    const tick = 8 + ORB.energy * 6;
+    ctx.beginPath(); ctx.moveTo(Math.cos(a1) * hexFR, Math.sin(a1) * hexFR);
+    ctx.lineTo(Math.cos(a2) * hexFR, Math.sin(a2) * hexFR);
+    ctx.strokeStyle = `rgba(${col},${(0.35 + ORB.energy * 0.3).toFixed(3)})`; ctx.lineWidth = 1.0 + ORB.energy * 0.5; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(Math.cos(a1) * hexFR, Math.sin(a1) * hexFR);
+    ctx.lineTo(Math.cos(a1) * (hexFR + tick), Math.sin(a1) * (hexFR + tick));
+    ctx.strokeStyle = `rgba(${col},${(0.6 + ORB.energy * 0.3).toFixed(3)})`; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  ctx.restore();
+
+  const hexFR2 = R * 1.25;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(-ORB.hexFrameAngle * 0.7 + Math.PI / 6);
+  for (let side = 0; side < 6; side++) {
+    const a1 = (Math.PI * 2 * side) / 6, a2 = (Math.PI * 2 * (side + 1)) / 6;
+    ctx.beginPath(); ctx.moveTo(Math.cos(a1) * hexFR2, Math.sin(a1) * hexFR2);
+    ctx.lineTo(Math.cos(a2) * hexFR2, Math.sin(a2) * hexFR2);
+    ctx.setLineDash([6, 10]); ctx.strokeStyle = `rgba(${col},${(0.18 + ORB.energy * 0.2).toFixed(3)})`; ctx.lineWidth = 0.8; ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.restore();
+
+  // L12: Waveform
+  if (ORB.mode >= 1 || ORB.energy > 0.15) {
+    const wR = R * 0.92, wCount = ORB.waveform.length, wAlpha = 0.15 + ORB.energy * 0.5;
+    ctx.beginPath();
+    for (let i = 0; i <= wCount; i++) {
+      const a = (Math.PI * 2 * i) / wCount;
+      const r = wR + ORB.waveform[i % wCount] * R * 0.25;
+      i === 0 ? ctx.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r)
+              : ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+    }
+    ctx.closePath(); ctx.strokeStyle = `rgba(${col},${wAlpha.toFixed(3)})`; ctx.lineWidth = 1.2 + ORB.energy * 1.5; ctx.stroke();
+    ctx.fillStyle = `rgba(${col},${(wAlpha * 0.08).toFixed(3)})`; ctx.fill();
+  }
+
+  // L13: Arc bolts
+  for (const bolt of ORB.arcBolts) {
+    if (!bolt.active || bolt.points.length < 2) continue;
+    ctx.beginPath(); ctx.moveTo(bolt.points[0].x, bolt.points[0].y);
+    for (let bi = 1; bi < bolt.points.length; bi++) ctx.lineTo(bolt.points[bi].x, bolt.points[bi].y);
+    ctx.strokeStyle = `rgba(${col},0.8)`; ctx.lineWidth = 1.0; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(bolt.points[0].x, bolt.points[0].y);
+    for (let bi = 1; bi < bolt.points.length; bi++) ctx.lineTo(bolt.points[bi].x, bolt.points[bi].y);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 3.0; ctx.stroke();
+  }
+
+  // L14: Mode rings
+  if (ORB.mode === 3) {
+    for (let i = 1; i <= 5; i++) {
+      const rr = R * (1.0 + i * 0.08 + ((ORB.phase * 0.8 + i * 0.3) % 0.8));
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${col},${Math.max(0, 0.25 - i * 0.04) * (0.5 + ORB.listenAmp * 0.5)})`;
+      ctx.lineWidth = 1.2; ctx.stroke();
+    }
+  }
+  if (ORB.mode === 2) {
+    for (let i = 1; i <= 6; i++) {
+      const rr = R * (0.95 + i * 0.07 + Math.sin(ORB.phase * (5 + i)) * 0.02 * ORB.speakAmp);
+      const ra = (0.22 - i * 0.025) * (0.5 + ORB.speakAmp * 0.8);
+      if (ra <= 0) continue;
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${col},${ra.toFixed(3)})`; ctx.lineWidth = 0.8 + ORB.speakAmp; ctx.stroke();
+    }
+  }
+  if (ORB.mode === 1) {
+    for (let i = 0; i < 4; i++) {
+      const aS = ORB.phase * (1.5 + i * 0.4) + i * Math.PI * 0.5;
+      const aE = aS + 0.4 + ORB.energy * 0.6 + Math.sin(ORB.phase * 4 + i) * 0.2;
+      ctx.beginPath(); ctx.arc(cx, cy, R * (1.02 + i * 0.025), aS, aE);
+      ctx.strokeStyle = `rgba(${col},${(0.5 + ORB.energy * 0.3).toFixed(3)})`; ctx.lineWidth = 2.0 - i * 0.3; ctx.stroke();
+    }
+  }
+
+  // L15: HUD corners
+  const hudSize = R * 0.18, hudGap = R * 1.15, hudAlpha = 0.22 + ORB.energy * 0.18;
+  for (const c of [{ dx:-1, dy:-1 }, { dx:1, dy:-1 }, { dx:1, dy:1 }, { dx:-1, dy:1 }]) {
+    const bx = cx + c.dx * hudGap, by = cy + c.dy * hudGap;
+    ctx.strokeStyle = `rgba(${col},${hudAlpha.toFixed(3)})`; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(bx + c.dx * -hudSize, by); ctx.lineTo(bx, by); ctx.lineTo(bx, by + c.dy * -hudSize); ctx.stroke();
+  }
+
+  // L16: Core
+  ctx.beginPath(); ctx.arc(cx, cy, R * 0.14, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(${col},${(0.5 + ORB.energy * 0.4).toFixed(3)})`; ctx.lineWidth = 1.5; ctx.stroke();
+
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(ORB.phase * 0.5);
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const ta = (Math.PI * 2 * i / 3) - Math.PI / 2;
+    i === 0 ? ctx.moveTo(Math.cos(ta) * R * 0.09, Math.sin(ta) * R * 0.09)
+            : ctx.lineTo(Math.cos(ta) * R * 0.09, Math.sin(ta) * R * 0.09);
+  }
+  ctx.closePath(); ctx.strokeStyle = `rgba(${col},${(0.6 + ORB.energy * 0.3).toFixed(3)})`; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.restore();
+
+  const coreR = 18 + ORB.energy * 22;
+  const core  = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  core.addColorStop(0, 'rgba(255,255,255,0.98)');
+  core.addColorStop(0.15, `rgba(${col},0.95)`);
+  core.addColorStop(0.5, `rgba(${col},0.4)`);
+  core.addColorStop(1, `rgba(${col},0)`);
+  ctx.fillStyle = core; ctx.beginPath(); ctx.arc(cx, cy, coreR, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy, 3.5 + ORB.energy * 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,1)'; ctx.fill();
+
+  requestAnimationFrame(drawJarvisInterface);
+}
+
+function setOrbMode(mode) {
+  const map = { idle:0, thinking:1, speaking:2, listening:3 };
+  ORB.mode = map[mode] !== undefined ? map[mode] : 0;
+  document.body.className = 'orb-' + mode;
+  const labels = { idle:'IDLE', thinking:'PROCESSING…', speaking:'SPEAKING', listening:'LISTENING' };
+  document.getElementById('state-label').textContent = labels[mode] || 'IDLE';
+}
+
+/* ─────────────────────────────────────────────────────
+   SYSTEM SPEECH (browser TTS fallback — Indian accent)
+───────────────────────────────────────────────────── */
+function speakSystem(text) {
+  if (!synth) return;
+  synth.cancel();
+  const clean = text.replace(/[*#`_~]/g, '').trim();
+  utterance = new SpeechSynthesisUtterance(clean);
+  const agent = AGENTS[activeAgent];
+  
+  utterance.pitch = agent.gender === 'female' ? 1.15 : 0.88;
+  utterance.rate  = agent.gender === 'female' ? 0.95 : 0.92;
+  utterance.volume = 1;
+
+  const pickVoice = () => {
+    const voices = synth.getVoices();
+    let v = null;
+    if (agent.gender === 'female') {
+      v = voices.find(v => v.name.toLowerCase().includes('hindi') && v.name.toLowerCase().includes('female'))
+       || voices.find(v => v.lang === 'hi-IN')
+       || voices.find(v => v.name.toLowerCase().includes('india') && v.name.toLowerCase().includes('female'))
+       || voices.find(v => v.lang.startsWith('en-IN'))
+       || voices.find(v => v.gender === 'female' || v.name.toLowerCase().includes('female'));
+    } else {
+      v = voices.find(v => v.lang === 'hi-IN')
+       || voices.find(v => v.lang.startsWith('en-IN'))
+       || voices.find(v => v.name.toLowerCase().includes('india'))
+       || voices.find(v => v.lang.startsWith('en-GB'))
+       || voices.find(v => v.lang.startsWith('en-'));
+    }
+    if (v) utterance.voice = v;
+  };
+
+  synth.getVoices().length ? pickVoice() : (synth.onvoiceschanged = pickVoice);
+  synth.speak(utterance);
+}
+
+/* ─────────────────────────────────────────────────────
+   AUDIO UTILITIES
+───────────────────────────────────────────────────── */
+function resampleTo16k(float32, fromRate) {
+  const ratio = fromRate / 16000, outLen = Math.floor(float32.length / ratio);
+  const out = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const src = i * ratio, lo = Math.floor(src), hi = Math.min(lo + 1, float32.length - 1);
+    const s = float32[lo] * (1 - (src - lo)) + float32[hi] * (src - lo);
+    out[i] = Math.max(-32768, Math.min(32767, Math.round(s * 32767)));
+  }
+  return out;
+}
+
+function int16ToBase64(buf) {
+  const bytes = new Uint8Array(buf.buffer);
+  let bin = '';
+  for (let i = 0; i < bytes.byteLength; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function base64ToFloat32(b64) {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const i16 = new Int16Array(bytes.buffer), f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  return f32;
+}
+
+function ensureAudioCtx() {
+  if (!audioCtx || audioCtx.state === 'closed') {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    nativeSR = audioCtx.sampleRate;
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playGeminiChunk(base64) {
+  ensureAudioCtx();
+  const f32 = base64ToFloat32(base64);
+  const buf = audioCtx.createBuffer(1, f32.length, 24000);
+  buf.getChannelData(0).set(f32);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf; src.connect(audioCtx.destination);
+  activeGeminiSources.add(src);
+  src.onended = () => activeGeminiSources.delete(src);
+  const now = audioCtx.currentTime;
+  if (nextPlayTime < now + 0.05) nextPlayTime = now + 0.05;
+  src.start(nextPlayTime); nextPlayTime += buf.duration;
+}
+
+function stopGeminiPlayback() {
+  if (synth) synth.cancel();
+  isSpeaking = false;
+  ORB.speakAmp = 0;
+  if (speakIv) clearInterval(speakIv);
+  document.getElementById('stop-btn').style.display = 'none';
+  for (const src of activeGeminiSources) {
+    try { src.stop(); } catch(e) {}
+  }
+  activeGeminiSources.clear();
+  if (audioCtx) nextPlayTime = audioCtx.currentTime;
+}
+
+function interruptAndStartNewTurn(userText) {
+  const clean = (userText || '').trim();
+  showToast('INTERRUPTED — LISTENING');
+  restartAfterClosePending = true;
+  restartAfterCloseText = clean || null;
+  stopGeminiPlayback();
+  closeLiveSession();
+  setTimeout(() => {
+    const nextText = restartAfterCloseText;
+    restartAfterCloseText = null;
+    restartAfterClosePending = false;
+    connectFails = 0;
+    startGeminiSession(nextText);
+  }, 180);
+}
+
+/* ─────────────────────────────────────────────────────
+   BACKEND API
+───────────────────────────────────────────────────── */
+async function fetchApiKey() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/config`);
+    const data = await res.json();
+    if (data.apiKey) { apiKey = data.apiKey; return true; }
+  } catch(err) { console.warn('[VIVEK] API key fetch failed:', err.message); }
+  return false;
+}
+
+async function createSession() {
+  if (currentSessionId && currentSessionAgent === activeAgent) return;
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/sessions`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ personality: activeAgent }),
     });
     const data = await res.json();
     currentSessionId = data.sessionId;
-    messages = [];
-  } catch(err) { console.warn('[VIVEK] Session error:', err.message); }
+    currentSessionAgent = activeAgent;
+  } catch(err) { currentSessionId = null; }
 }
 
-async function loadSessionMessages(sessionId) {
-  try {
-    const res  = await fetch(`${BACKEND_URL}/api/sessions/${sessionId}/messages`);
-    const data = await res.json();
-    if (data.messages && data.messages.length > 0) {
-      messages = data.messages.slice(-40).map(m => ({ role: m.role, content: m.content }));
-      showToast(`MEMORY RESTORED — ${messages.length} msgs`);
-    } else { messages = []; }
-  } catch(err) { messages = []; }
+function normalizeSpeechText(text) {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[.,!?]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function saveUserSpeechText(text) {
+  const clean = (text || '').trim();
+  if (clean.length < 2) return;
+  if (clean === lastSavedUserText) return;
+  lastSavedUserText = clean;
+  saveMessage('user', clean);
+}
+
+function saveAssistantSpeechText(text) {
+  const clean = (text || '').trim();
+  if (clean.length < 2) return;
+  if (clean === lastSavedAssistantText) return;
+  lastSavedAssistantText = clean;
+  saveMessage('assistant', clean);
+}
+
+function isStopCommand(normalizedText) {
+  return /\b(stop|stop it|stop karo|ruko|ruk jao|ruko|bas|bus|chup|chup ho jao|band karo|band kar do|rukiye)\b/.test(normalizedText);
+}
+
+function isSwitchToVivek(normalizedText) {
+  return /^(vivek)$/.test(normalizedText)
+    || /\b(switch to vivek|back to vivek|call vivek|activate vivek|male agent)\b/.test(normalizedText);
+}
+
+function isSwitchToPriya(normalizedText) {
+  return /^(priya)$/.test(normalizedText)
+    || /\b(switch to priya|call priya|activate priya|female agent)\b/.test(normalizedText);
+}
+
+function stopCurrentResponseOnly() {
+  if (assistantBuffer) {
+    saveAssistantSpeechText(assistantBuffer);
+    assistantBuffer = '';
+  }
+  suppressModelAudioUntilTurnComplete = true;
+  stopGeminiPlayback();
+  isThinking = false;
+  isListening = true;
+  setOrbMode('listening');
+  const txEl = document.getElementById('transcript-text');
+  txEl.textContent = 'Listening…';
+  txEl.classList.add('active');
 }
 
 async function saveMessage(role, content) {
@@ -259,7 +1137,7 @@ async function loadHistory() {
   const list = document.getElementById('history-list');
   list.innerHTML = '<div class="h-empty">Loading…</div>';
   try {
-    const res  = await fetch(`${BACKEND_URL}/api/sessions?limit=15`);
+    const res = await fetch(`${BACKEND_URL}/api/sessions?limit=15`);
     const data = await res.json();
     if (!data.sessions || data.sessions.length === 0) {
       list.innerHTML = '<div class="h-empty">No sessions yet.</div>'; return;
@@ -267,846 +1145,456 @@ async function loadHistory() {
     list.innerHTML = '';
     for (const s of data.sessions) {
       const date = new Date(s.created_at).toLocaleDateString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
-      const div  = document.createElement('div');
+      const div = document.createElement('div');
       div.className = 'h-session';
       div.innerHTML = `
         <div class="h-session-id">${s.personality.toUpperCase()} · ${date}</div>
         <div class="h-session-meta">${s.message_count || 0} messages</div>
         ${s.last_user_msg ? `<div class="h-session-preview">"${s.last_user_msg.slice(0,55)}…"</div>` : ''}
       `;
+      div.onclick = () => viewSession(s.id);
       list.appendChild(div);
     }
   } catch(err) { list.innerHTML = '<div class="h-empty">Could not connect to backend.</div>'; }
 }
 
+async function viewSession(id) {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/sessions/${id}`);
+    const data = await res.json();
+    const msgs = data.messages || [];
+    const preview = msgs.slice(-4).map(m => `[${m.role.toUpperCase()}] ${m.content.slice(0,80)}`).join('\n');
+    showToast('SESSION LOADED');
+    document.getElementById('transcript-text').textContent = preview || 'Empty session.';
+    document.getElementById('transcript-text').classList.add('active');
+  } catch(err) { showToast('LOAD FAILED'); }
+}
+
 function toggleHistory() {
-  const body   = document.getElementById('history-body');
+  const body = document.getElementById('history-body');
   const isOpen = body.classList.toggle('open');
   if (isOpen) loadHistory();
 }
 
 /* ─────────────────────────────────────────────────────
-   LIVE DATA DETECTION
+   MIC CAPTURE
 ───────────────────────────────────────────────────── */
-function needsLiveData(text) {
-  const t = text.toLowerCase();
-  return [
-    /\b(today|tonight|right now|current|currently|live|latest|recent|now|at the moment)\b/,
-    /\b(score|match|ipl|cricket|football|hockey|tennis|game|result|winner|playing|tournament)\b/,
-    /\b(weather|temperature|rain|forecast|humidity|climate)\b/,
-    /\b(news|headline|happened|breaking|update|event|announcement)\b/,
-    /\b(price|rate|stock|share|market|bitcoin|crypto|dollar|rupee|exchange|sensex|nifty)\b/,
-    /\b(trending|viral|popular|top chart)\b/,
-    /\b(who won|who is winning|what is the score|what happened|what's happening|what is happening)\b/,
-    /\b(election|vote|result|poll|minister|president|pm|cm)\b/,
-    /aaj|abhi|kal ka|live score|kya hua|kya ho raha|abhi kya|aaj ka/,
-  ].some(p => p.test(t));
-}
-
-/* ─────────────────────────────────────────────────────
-   GROQ API CALL
-───────────────────────────────────────────────────── */
-async function callGroq(userText) {
-  const agent        = AGENTS[activeAgent];
-  const systemPrompt = agent.buildPrompt(learnedInstructions);
-
-  let augmentedText = userText;
-
-  if (needsLiveData(userText)) {
-    try {
-      setTranscript('Fetching live data from Google…');
-      const searchRes  = await fetch(`${BACKEND_URL}/api/search?q=${encodeURIComponent(userText)}`);
-      const searchData = await searchRes.json();
-      if (searchData.result && searchData.result.length > 0) {
-        augmentedText = `[LIVE DATA: ${searchData.result}]\n\nUser asked: ${userText}`;
-      }
-    } catch(err) {
-      console.warn('[VIVEK] Live search failed:', err.message);
-    }
-  }
-
-  const groqMessages = [
-    { role: 'system', content: systemPrompt },
-    ...messages.slice(-20),
-    { role: 'user', content: augmentedText }
-  ];
-
-  const res = await fetch(`${BACKEND_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages: groqMessages }),
-  });
-
-  if (!res.ok) throw new Error('Chat API error: ' + await res.text());
-  const data = await res.json();
-  return data.reply;
-}
-
-/* ─────────────────────────────────────────────────────
-   TTS — Gemini Neural Voice (same as original Vivek)
-   Calls /api/tts on the backend which uses Gemini TTS.
-   Falls back to browser SpeechSynthesis if that fails.
-───────────────────────────────────────────────────── */
-let audioCtx = null;
-let activeAudioSource = null;
-
-function ensureAudioCtx() {
-  if (!audioCtx || audioCtx.state === 'closed') {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  if (audioCtx.state === 'suspended') audioCtx.resume();
-}
-
-function base64ToFloat32(b64) {
-  const bin   = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const i16 = new Int16Array(bytes.buffer);
-  const f32 = new Float32Array(i16.length);
-  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
-  return f32;
-}
-
-async function speakText(text) {
-  const clean = text.replace(/[*#`_~\[\]]/g, '').trim();
-  if (!clean) return;
-
-  // Keep recognition running during speech so 'stop' and agent-switch commands work
-  isSpeaking = true;
-  setOrbMode('speaking');
-  document.getElementById('stop-btn').style.display = 'block';
-  pulseSpeaking();
-  // Show transcript only now — audio is about to start (TTS request already completed)
-  setTranscript(clean.slice(0, 120) + (clean.length > 120 ? '…' : ''));
-
-  const agent     = AGENTS[activeAgent];
-  const voiceName = agent.geminiVoice || 'Puck';
-
+async function startMicCapture() {
+  if (micStream) return;
   try {
-    const res  = await fetch(`${BACKEND_URL}/api/tts`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ text: clean, voice: voiceName }),
+    ensureAudioCtx(); nativeSR = audioCtx.sampleRate;
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false
     });
-    const data = await res.json();
-    if (!data.audio) throw new Error('No audio from TTS');
+    micSrcNode = audioCtx.createMediaStreamSource(micStream);
+    scriptProc = audioCtx.createScriptProcessor(4096, 1, 1);
+    scriptProc.onaudioprocess = function(e) {
+      const raw = e.inputBuffer.getChannelData(0);
+      let rms = 0;
+      for (let i = 0; i < raw.length; i++) rms += raw[i] * raw[i];
+      rms = Math.sqrt(rms / raw.length);
+      ORB.listenAmp = Math.min(1, rms * 10);
 
-    ensureAudioCtx();
-    const f32 = base64ToFloat32(data.audio);
-    const buf = audioCtx.createBuffer(1, f32.length, 24000);
-    buf.getChannelData(0).set(f32);
-    const src = audioCtx.createBufferSource();
-    src.buffer = buf;
-    src.connect(audioCtx.destination);
-    activeAudioSource = src;
-
-    src.onended = () => {
-      activeAudioSource = null;
-      onSpeakDone();
+      if (!sessionReady || !liveWs || liveWs.readyState !== WebSocket.OPEN || !isListening) return;
+      const resampled = resampleTo16k(raw, nativeSR);
+      liveWs.send(JSON.stringify({ realtimeInput: { audio: { data: int16ToBase64(resampled), mimeType: 'audio/pcm;rate=16000' } } }));
     };
-    src.start();
+    micSrcNode.connect(scriptProc); scriptProc.connect(audioCtx.destination);
+    setOrbMode('listening');
+    const txEl = document.getElementById('transcript-text');
+    txEl.textContent = 'Listening…'; txEl.classList.add('active');
   } catch(err) {
-    console.warn('[VIVEK] Gemini TTS failed, falling back to browser TTS:', err.message);
-    speakBrowserFallback(clean);
+    const txEl = document.getElementById('transcript-text');
+    txEl.textContent = err.name === 'NotAllowedError' ? 'Microphone access denied.' : 'Mic error: ' + err.message;
+    txEl.classList.add('active');
+    closeLiveSession();
+    if (apiKey) setTimeout(() => startGeminiSession(null), 2000);
   }
 }
 
-function speakBrowserFallback(clean) {
-  if (!synth) { onSpeakDone(); return; }
-  synth.cancel();
-  utterance = new SpeechSynthesisUtterance(clean);
-  const agent = AGENTS[activeAgent];
-  utterance.pitch  = agent.gender === 'female' ? 1.15 : 0.88;
-  utterance.rate   = agent.gender === 'female' ? 0.95 : 0.92;
-  utterance.volume = 1;
-  const pickVoice = () => {
-    const voices = synth.getVoices();
-    let v = voices.find(v => v.lang.startsWith('en-IN'))
-         || voices.find(v => v.name.toLowerCase().includes('india'))
-         || voices.find(v => v.lang.startsWith('en-'));
-    if (v) utterance.voice = v;
+function stopMicCapture() {
+  if (scriptProc)  { try { scriptProc.disconnect(); } catch(e) {} scriptProc  = null; }
+  if (micSrcNode)  { try { micSrcNode.disconnect(); } catch(e) {} micSrcNode  = null; }
+  if (micStream)   { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+  ORB.listenAmp = 0;
+}
+
+function closeLiveSession() {
+  stopMicCapture();
+  if (liveWs) { try { liveWs.close(); } catch(e) {} liveWs = null; }
+  sessionReady = false; isListening = false; isSpeaking = false;
+  isThinking = false; isDormant = true;
+  stopGeminiPlayback();
+}
+
+/* ─────────────────────────────────────────────────────
+   WAKE WORD DETECTION (Both agents)
+───────────────────────────────────────────────────── */
+function scheduleWakeRestart(delay) {
+  if (wakeRestartTimer) clearTimeout(wakeRestartTimer);
+  wakeRestartTimer = setTimeout(() => {
+    wakeRestartTimer = null;
+    if (isDormant && apiKey && !wakeRunning) startWakeDetection();
+  }, delay || 600);
+}
+
+function startWakeDetection() {
+  if (!apiKey || !SpeechRec || wakeRunning || !isDormant) return;
+  const txEl = document.getElementById('transcript-text');
+  const agentName = AGENTS[activeAgent].label;
+  txEl.textContent = `Say "${agentName}" to activate…`; txEl.classList.remove('active');
+  setOrbMode('idle');
+  try { wakeRec = new SpeechRec(); } catch(e) { scheduleWakeRestart(2000); return; }
+  wakeRec.continuous = true; wakeRec.interimResults = true;
+  wakeRec.lang = activeAgent === 'priya' ? 'hi-IN' : 'en-IN';
+  wakeRunning = true;
+
+  wakeRec.onresult = function(e) {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript.toLowerCase().trim();
+      const vivekWake = /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/i.test(t);
+      const priyaWake = /\b(priya|prya|preya|priyaa)\b/i.test(t);
+      
+      // Switch to Priya if "call priya" / "switch to priya" detected
+      if (priyaWake && activeAgent !== 'priya') {
+        stopWakeDetection(); switchAgent('priya');
+        const trailing = t.split(/priya/i).slice(1).join('').replace(/[.,!?]/g, '').trim();
+        startGeminiSession(trailing || null); return;
+      }
+      if (vivekWake && activeAgent === 'priya') {
+        stopWakeDetection(); switchAgent('vivek');
+        const trailing = t.split(/vivek/i).slice(1).join('').replace(/[.,!?]/g, '').trim();
+        startGeminiSession(trailing || null); return;
+      }
+
+      const currentWakeWord = AGENTS[activeAgent].wakeWord;
+      if (currentWakeWord.test(t)) {
+        stopWakeDetection(); showToast('WAKE WORD DETECTED');
+        txEl.textContent = 'Connecting…'; txEl.classList.add('active');
+        const parts = t.split(currentWakeWord);
+        const trailing = parts.slice(1).join('').replace(/[.,!?]/g, '').trim();
+        startGeminiSession(trailing || null); return;
+      }
+    }
   };
-  synth.getVoices().length ? pickVoice() : (synth.onvoiceschanged = pickVoice);
-  utterance.onend   = onSpeakDone;
-  utterance.onerror = onSpeakDone;
-  synth.speak(utterance);
+
+  wakeRec.onend = function() {
+    wakeRunning = false; wakeRec = null;
+    if (isDormant && apiKey) scheduleWakeRestart(300);
+  };
+  wakeRec.onerror = function(e) {
+    wakeRunning = false; wakeRec = null;
+    if (e.error === 'not-allowed') { document.getElementById('transcript-text').textContent = 'Mic access denied.'; return; }
+    if (isDormant && apiKey) scheduleWakeRestart(e.error === 'network' ? 1500 : 2000);
+  };
+  try { wakeRec.start(); } catch(e) { wakeRunning = false; wakeRec = null; scheduleWakeRestart(1000); }
 }
 
-function onSpeakDone() {
-  isSpeaking   = false;
-  ORB.speakAmp = 0;
-  if (speakIv) clearInterval(speakIv);
-  document.getElementById('stop-btn').style.display = 'none';
-  setOrbMode('listening');
-  setTranscript('Listening…');
-  if (!recRunning) startRecognition();
+function stopWakeDetection() {
+  wakeRunning = false;
+  if (wakeRestartTimer) { clearTimeout(wakeRestartTimer); wakeRestartTimer = null; }
+  if (wakeRec) { try { wakeRec.stop(); } catch(e) {} wakeRec = null; }
 }
 
-function stopSpeaking() {
-  // Stop Gemini audio
-  if (activeAudioSource) {
-    try { activeAudioSource.stop(); } catch(e) {}
-    activeAudioSource = null;
-  }
-  // Stop browser TTS fallback
-  if (synth) synth.cancel();
-  isSpeaking   = false;
-  ORB.speakAmp = 0;
-  if (speakIv) clearInterval(speakIv);
-  document.getElementById('stop-btn').style.display = 'none';
-  setOrbMode('listening');
-  setTranscript('Listening…');
-  if (!recRunning) startRecognition();
+/* ─────────────────────────────────────────────────────
+   STOP ALL
+───────────────────────────────────────────────────── */
+function stopAll() {
+  stopGeminiPlayback();
+  closeLiveSession();
+  setOrbMode('idle');
+  if (apiKey) setTimeout(() => startGeminiSession(null), 450);
 }
+
+function stopSpeaking() { stopAll(); }
 
 function pulseSpeaking() {
   if (speakIv) clearInterval(speakIv);
-  speakIv = setInterval(() => {
+  speakIv = setInterval(function() {
     if (!isSpeaking) { clearInterval(speakIv); ORB.speakAmp = 0; return; }
     ORB.speakAmp = 0.2 + Math.random() * 0.8;
   }, 90);
 }
 
 /* ─────────────────────────────────────────────────────
-   PROCESS USER INPUT — main pipeline
+   GEMINI LIVE SESSION
+   Core change: system prompt makes agent speak in
+   its own voice, not raw Gemini output
 ───────────────────────────────────────────────────── */
-async function processUserInput(text) {
-  const trimmed    = text.trim();
-  if (!trimmed || trimmed.length < 2) return;
-  const normalized = trimmed.toLowerCase().replace(/[.,!?]/g, ' ').replace(/\s+/g, ' ').trim();
+async function startGeminiSession(initialText) {
+  if (liveWs && liveWs.readyState === WebSocket.OPEN) liveWs.close();
+  isDormant = false; sessionReady = false; isListening = true;
+  isThinking = false; isSpeaking = false; nextPlayTime = 0;
+  suppressModelAudioUntilTurnComplete = false;
+  assistantBuffer = '';
+  await createSession();
 
-  // STOP
-  if (/\b(stop|stop it|stop karo|ruko|ruk jao|bas|bus|chup|chup karo|band karo|rukiye|rok do|ruk|khamosh|mat bolo)\b/.test(normalized)) {
-    stopSpeaking(); return;
-  }
-
-  // AGENT SWITCH — say "Priya" to switch to Priya, "Vivek" to switch back
-  const priyaMatch = /\b(priya|prya|preya|priyaa)\b/.test(normalized);
-  const vivekMatch = /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/.test(normalized);
-
-  if (priyaMatch && activeAgent !== 'priya') {
-    switchAgent('priya');
-    await createOrResumeSession();
-    speakText('Haan Sir, Priya here. Kya chahiye aapko?');
-    return;
-  }
-  if (vivekMatch && activeAgent !== 'vivek') {
-    switchAgent('vivek');
-    await createOrResumeSession();
-    speakText('Yes Sir, Vivek here. How can I help?');
-    return;
-  }
-
-  // COLOR CHANGE
-  if (/\b(color|colour|orb|change|make|set)\b/.test(normalized)) {
-    for (const w of normalized.split(/\s+/)) {
-      if (COLOR_MAP[w]) { setColor(COLOR_MAP[w]); speakText('Color changed to ' + COLORS[COLOR_MAP[w]].label + ', Sir.'); return; }
-    }
-  }
-
-  // CLEAR MEMORY
-  if (/^(clear|reset|wipe|forget)/.test(normalized)) {
-    messages = []; showToast('MEMORY CLEARED');
-    speakText('Conversation memory cleared, Sir.'); return;
-  }
-
-  // Learn permanent instructions
-  detectAndSaveInstruction(trimmed);
-
-  // MAIN AI PIPELINE
-  isThinking = true;
+  const agent = AGENTS[activeAgent];
+  const systemPrompt = agent.buildPrompt(learnedInstructions);
+  const txEl = document.getElementById('transcript-text');
+  txEl.textContent = 'Neural bridge connecting…'; txEl.classList.add('active');
   setOrbMode('thinking');
-  setTranscript('Processing: ' + trimmed.slice(0, 60) + (trimmed.length > 60 ? '…' : ''));
 
-  try {
-    const reply = await callGroq(trimmed);
-
-    // Update in-memory history
-    messages.push({ role: 'user', content: trimmed });
-    messages.push({ role: 'assistant', content: reply });
-    if (messages.length > 40) messages = messages.slice(-40);
-
-    isThinking = false;
-    // Don't show transcript here — speakText will show it when audio actually starts
-    // This prevents text appearing 1-3 seconds before the voice plays
-
-    // Fire DB saves in background — don't block speech
-    Promise.all([
-      saveMessage('user', trimmed),
-      saveMessage('assistant', reply),
-    ]).catch(() => {});
-
-    speakText(reply);
-    return;
-
-  } catch(err) {
-    console.error('[VIVEK] Error:', err);
-    isThinking = false;
-    setOrbMode('listening');
-    const errMsg = 'Sorry Sir, kuch technical issue aa gaya. Please try again.';
-    setTranscript(errMsg);
-    speakText(errMsg);
+  let ws;
+  try { ws = new WebSocket('wss://vivek-qqwu.onrender.com/gemini-proxy'); liveWs = ws; } catch(e) {
+    txEl.textContent = 'WebSocket failed: ' + e.message;
+    closeLiveSession();
+    if (apiKey) setTimeout(() => startGeminiSession(null), 2000);
     return;
   }
-}
 
-/* ─────────────────────────────────────────────────────
-   SPEECH RECOGNITION — always listening
-───────────────────────────────────────────────────── */
-function scheduleRecRestart(delay) {
-  if (recRestartTimer) clearTimeout(recRestartTimer);
-  recRestartTimer = setTimeout(() => {
-    recRestartTimer = null;
-    if (!recRunning && gestureUnlocked) startRecognition();
-  }, delay || 500);
-}
+  const connTimeout = setTimeout(() => {
+    if (!sessionReady) {
+      txEl.textContent = 'Connection timed out.';
+      closeLiveSession();
+      if (apiKey) setTimeout(() => startGeminiSession(null), 2000);
+    }
+  }, 15000);
 
-let micAnalyser = null;
-let micAnalyserBuf = null;
+  ws.onopen = function() {
+    if (liveWs !== ws) { ws.close(); return; }
+    ws.send(JSON.stringify({
+      setup: {
+        model: 'models/gemini-3.1-flash-live-preview',
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: agent.geminiVoice || 'Puck' } }
+          },
+        },
+        outputAudioTranscription: {},
+        inputAudioTranscription: {},
+        systemInstruction: { parts: [{ text: systemPrompt }] }
+      }
+    }));
+  };
 
-function startMicAmplitude() {
-  // Feed real microphone amplitude into ORB.listenAmp for the listening animation
-  if (micAnalyser) return;
-  try {
-    ensureAudioCtx();
-    navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(stream => {
-      const src = audioCtx.createMediaStreamSource(stream);
-      micAnalyser = audioCtx.createAnalyser();
-      micAnalyser.fftSize = 256;
-      micAnalyserBuf = new Uint8Array(micAnalyser.frequencyBinCount);
-      src.connect(micAnalyser);
-      (function tick() {
-        if (!micAnalyser) return;
-        micAnalyser.getByteTimeDomainData(micAnalyserBuf);
-        let sum = 0;
-        for (let i = 0; i < micAnalyserBuf.length; i++) {
-          const v = (micAnalyserBuf[i] - 128) / 128;
-          sum += v * v;
+  ws.onmessage = async function(event) {
+    if (liveWs !== ws) return;
+    let data;
+    try {
+      const raw = (event.data instanceof Blob) ? await event.data.text() : event.data;
+      data = JSON.parse(raw);
+    } catch(e) { return; }
+
+    if (data.setupComplete !== undefined) {
+      clearTimeout(connTimeout); sessionReady = true; connectFails = 0;
+      setOrbMode('listening'); txEl.textContent = 'Listening…'; txEl.classList.add('active');
+      if (initialText) { saveMessage('user', initialText); sendTextTurn(initialText); }
+      else startMicCapture();
+      return;
+    }
+
+    if (data.serverContent) {
+      const sc = data.serverContent;
+      if (sc.modelTurn && sc.modelTurn.parts) {
+        for (const part of sc.modelTurn.parts) {
+          if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.indexOf('audio') !== -1) {
+            if (suppressModelAudioUntilTurnComplete) continue;
+            if (!isSpeaking) {
+              isSpeaking = true;
+              speakingStartedAt = performance.now();
+              setOrbMode('speaking');
+              document.getElementById('stop-btn').style.display = 'block';
+              pulseSpeaking();
+            }
+            playGeminiChunk(part.inlineData.data);
+          }
+          if (part.text) {
+            if (suppressModelAudioUntilTurnComplete) continue;
+            assistantBuffer += part.text;
+            txEl.textContent = assistantBuffer.length > 120 ? assistantBuffer.slice(0, 120) + '…' : assistantBuffer;
+            txEl.classList.add('active');
+          }
         }
-        ORB.listenAmp = Math.min(1, Math.sqrt(sum / micAnalyserBuf.length) * 8);
-        requestAnimationFrame(tick);
-      })();
-    }).catch(() => {});
-  } catch(e) {}
-}
-
-function startRecognition() {
-  if (!SpeechRec || recRunning) return;
-  startMicAmplitude(); // start amplitude meter for listening animation
-  try { rec = new SpeechRec(); } catch(e) { scheduleRecRestart(2000); return; }
-
-  rec.continuous     = true;
-  rec.interimResults = true;
-  rec.lang           = activeAgent === 'priya' ? 'hi-IN' : 'en-IN';
-  recRunning         = true;
-  currentTranscript  = '';
-
-  rec.onresult = function(e) {
-    let interim = '', final = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) final += t;
-      else interim += t;
-    }
-
-    if (interim && !isSpeaking) setTranscript('Hearing: ' + interim);
-
-    if (final) {
-      const norm = final.toLowerCase().replace(/[.,!?]/g, ' ').trim();
-
-      // ── PRIORITY: stop & agent-switch work even while AI is speaking ──
-      if (/\b(stop|stop it|stop karo|ruko|ruk jao|bas|bus|chup|chup karo|band karo|rukiye|rok do|ruk|khamosh|mat bolo)\b/.test(norm)) {
-        stopSpeaking(); currentTranscript = ''; return;
-      }
-      const priyaNow = /\b(priya|prya|preya|priyaa)\b/.test(norm);
-      const vivekNow = /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/.test(norm);
-      if (priyaNow && activeAgent !== 'priya') {
-        stopSpeaking(); currentTranscript = '';
-        switchAgent('priya'); createOrResumeSession().then(() => speakText('Haan Sir, Priya here. Kya chahiye aapko?')); return;
-      }
-      if (vivekNow && activeAgent !== 'vivek') {
-        stopSpeaking(); currentTranscript = '';
-        switchAgent('vivek'); createOrResumeSession().then(() => speakText('Yes Sir, Vivek here. How can I help?')); return;
       }
 
-      // ── Normal: ignore input while AI is still speaking ──
-      if (isSpeaking) return;
-
-      currentTranscript = (currentTranscript + ' ' + final).trim();
-      if (silenceTimer) clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => {
-        const toProcess   = currentTranscript.trim();
-        currentTranscript = '';
-        if (toProcess.length > 1) {
-          processUserInput(toProcess);
+      if (sc.outputAudioTranscription && sc.outputAudioTranscription.text) {
+        if (suppressModelAudioUntilTurnComplete) {
+          // Ignore remaining model output after an explicit stop command.
+        } else {
+        assistantBuffer += sc.outputAudioTranscription.text;
+        txEl.textContent = assistantBuffer.length > 120 ? assistantBuffer.slice(0, 120) + '…' : assistantBuffer;
+        txEl.classList.add('active');
         }
-      }, 1200);
+      }
+
+      // User speech transcription — detect commands and instruction learning
+      if (sc.inputAudioTranscription && sc.inputAudioTranscription.text) {
+        const userSaid = sc.inputAudioTranscription.text.trim();
+        const normalized = normalizeSpeechText(userSaid);
+        if (!normalized) return;
+        saveUserSpeechText(userSaid);
+
+        if (isStopCommand(normalized)) {
+          if (isSpeaking || isThinking) stopCurrentResponseOnly();
+          return;
+        }
+
+        // Check for agent switch command during active session
+        if (isSwitchToPriya(normalized) && activeAgent !== 'priya') {
+          currentSessionId = null;
+          currentSessionAgent = null;
+          switchAgent('priya');
+          closeLiveSession();
+          setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
+          return;
+        }
+        if (isSwitchToVivek(normalized) && activeAgent !== 'vivek') {
+          currentSessionId = null;
+          currentSessionAgent = null;
+          switchAgent('vivek');
+          closeLiveSession();
+          setTimeout(() => { connectFails = 0; startGeminiSession(null); }, 800);
+          return;
+        }
+
+        // Color change
+        const colorWords = normalized.split(/\s+/);
+        if (/\b(color|colour|orb|change|make|set)\b/.test(normalized)) {
+          for (const w of colorWords) { if (COLOR_MAP[w]) { setColor(COLOR_MAP[w]); break; } }
+        }
+
+        // Save instruction if Boss gave one
+        detectAndSaveInstruction(userSaid);
+      }
+
+      if (sc.turnComplete) {
+        if (assistantBuffer) {
+          saveAssistantSpeechText(assistantBuffer);
+          assistantBuffer = '';
+        }
+        suppressModelAudioUntilTurnComplete = false;
+        isThinking = false;
+        const remaining = audioCtx ? Math.max(0, nextPlayTime - audioCtx.currentTime) : 0;
+        setTimeout(function() {
+          stopGeminiPlayback();
+          isListening = true;
+          txEl.textContent = 'Listening…';
+          txEl.classList.add('active');
+          setOrbMode('listening');
+          if (!micStream) startMicCapture();
+        }, remaining * 1000 + 500);
+      }
+    }
+
+    if (data.error) {
+      clearTimeout(connTimeout);
+      txEl.textContent = data.error.message || 'Neural bridge error.'; txEl.classList.add('active');
+      closeLiveSession();
+      if (apiKey) setTimeout(() => startGeminiSession(null), 2000);
     }
   };
 
-  rec.onend = function() {
-    recRunning = false; rec = null;
-    // Always restart — we need to hear "stop" even while agent is speaking
-    if (gestureUnlocked) scheduleRecRestart(300);
+  ws.onerror = function() {
+    clearTimeout(connTimeout);
+    document.getElementById('transcript-text').textContent = 'Connection error.';
+    document.getElementById('transcript-text').classList.add('active');
+    closeLiveSession(); setOrbMode('idle');
+    if (apiKey) setTimeout(() => startGeminiSession(null), 3000);
   };
 
-  rec.onerror = function(e) {
-    recRunning = false; rec = null;
-    if (e.error === 'not-allowed') { setTranscript('Microphone access denied. Please allow mic.'); return; }
-    if (gestureUnlocked) scheduleRecRestart(e.error === 'network' ? 1500 : 800);
+  ws.onclose = function() {
+    clearTimeout(connTimeout); sessionReady = false; stopMicCapture();
+    if (restartAfterClosePending) return;
+    if (!isDormant && apiKey) {
+      isDormant = true; setOrbMode('idle');
+      connectFails++;
+      if (connectFails >= MAX_FAILS) {
+        const txEl = document.getElementById('transcript-text');
+        txEl.textContent = `❌ Gemini connection failed ${connectFails} times. Check GEMINI_API_KEY on server.`;
+        txEl.classList.add('active');
+        return;
+      }
+      setTimeout(() => startGeminiSession(null), 800);
+    }
   };
-
-  try { rec.start(); setOrbMode('listening'); setTranscript('Listening…'); }
-  catch(e) { recRunning = false; rec = null; scheduleRecRestart(1000); }
 }
 
-function stopRecognition() {
-  recRunning = false;
-  if (recRestartTimer) { clearTimeout(recRestartTimer); recRestartTimer = null; }
-  if (silenceTimer)    { clearTimeout(silenceTimer);    silenceTimer    = null; }
-  if (rec) { try { rec.stop(); } catch(e) {} rec = null; }
-}
-
-/* ─────────────────────────────────────────────────────
-   BOOT & INIT
-───────────────────────────────────────────────────── */
-async function unlockAndStart() {
-  if (gestureUnlocked) return;
-  gestureUnlocked = true;
-
-  loadInstructions();
-  const savedAgent = localStorage.getItem('vivek_active_agent') || 'vivek';
-  activeAgent = savedAgent;
-  updateAgentUI();
-  setColor(AGENTS[activeAgent].color);
-  setTranscript('Connecting…');
-
-  try {
-    const res  = await fetch(`${BACKEND_URL}/health`);
-    const data = await res.json();
-    if (data.status !== 'online') throw new Error('Backend offline');
-  } catch(err) {
-    setTranscript('Backend offline. Check BACKEND_URL in app.js'); return;
-  }
-
-  await createOrResumeSession();
-  startRecognition();
-}
-
-var bootLines = ['bl1','bl2','bl3','bl4','bl5'];
-var bootIdx = 0, bootPct = 0;
-
-function runBoot() {
-  const bar = document.getElementById('boot-bar');
-  const pct = document.getElementById('boot-pct');
-  const iv  = setInterval(function() {
-    bootPct += 1.8;
-    bar.style.width = Math.min(bootPct, 100) + '%';
-    pct.textContent = Math.min(Math.floor(bootPct), 100) + '%';
-    if (bootPct % 20 < 1.9 && bootIdx < bootLines.length) {
-      const el = document.getElementById(bootLines[bootIdx]);
-      if (el) { el.style.opacity = '1'; el.classList.add('ok'); }
-      bootIdx++;
-    }
-    if (bootPct >= 100) {
-      clearInterval(iv);
-      setTimeout(() => {
-        const overlay = document.getElementById('boot-overlay');
-        overlay.style.transition = 'opacity 0.6s';
-        overlay.style.opacity    = '0';
-        setTimeout(() => { overlay.style.display = 'none'; }, 650);
-
-        // Auto-start on first user interaction (browser requires gesture for mic)
-        const autoStart = async () => {
-          document.removeEventListener('click',      autoStart);
-          document.removeEventListener('keydown',    autoStart);
-          document.removeEventListener('touchstart', autoStart);
-          await unlockAndStart();
-        };
-        document.addEventListener('click',      autoStart, { once: true });
-        document.addEventListener('keydown',    autoStart, { once: true });
-        document.addEventListener('touchstart', autoStart, { once: true });
-        setTranscript('Tap anywhere to start listening…');
-      }, 280);
-    }
-  }, 25);
-}
-
-function setTranscript(text) {
-  const el = document.getElementById('transcript-text');
-  el.textContent = text;
-  el.classList.add('active');
-}
-
-/* ─────────────────────────────────────────────────────
-   ORB CANVAS — JARVIS HOLOGRAPHIC INTERFACE
-───────────────────────────────────────────────────── */
-const canvas = document.getElementById('orb-canvas');
-const ctx    = canvas.getContext('2d');
-
-const ORB = {
-  cx:0,cy:0,R:0,liveR:0,liveScale:1,mode:0,energy:0,speakAmp:0,listenAmp:0,
-  phase:0,breathe:0,rotY:0,rotX:0.28,hexTiles:[],reactorArcs:[],scanAngle:0,
-  particles:[],dataStreams:[],orbitRings:[],circuitNodes:[],
-  waveform:new Float32Array(64),hexFrameAngle:0,arcBolts:[],depthAngle:0,
-};
-
-function resizeCanvas() {
-  canvas.width  = window.innerWidth;
-  canvas.height = window.innerHeight;
-  ORB.cx = canvas.width / 2; ORB.cy = canvas.height / 2;
-  ORB.R  = Math.min(canvas.width, canvas.height) * 0.28;
-  if (!ORB.liveR) ORB.liveR = ORB.R;
-  buildJarvisInterface();
-}
-
-function buildJarvisInterface() {
-  buildHexTiles(); buildReactorArcs(); buildParticles();
-  buildDataStreams(); buildOrbitRings(); buildCircuitNodes(); buildArcBolts();
-}
-
-function buildHexTiles() {
-  ORB.hexTiles = [];
-  const ls = 14, ln = 22;
-  for (let i = 0; i < ls; i++) for (let j = 0; j < ln; j++) {
-    const lat = -Math.PI/2 + Math.PI*i/(ls-1);
-    const lon = Math.PI*2*j/ln + (i%2)*(Math.PI/ln);
-    if (Math.cos(lat) < 0.15) continue;
-    ORB.hexTiles.push({ lat, lon, size:0.055+Math.random()*0.025, opacity:0.08+Math.random()*0.15,
-      pulse:Math.random()*Math.PI*2, speed:0.4+Math.random()*1.2,
-      active:Math.random()<0.12, activePulse:Math.random()*Math.PI*2 });
-  }
-}
-
-function buildReactorArcs() {
-  ORB.reactorArcs = [];
-  const rings = [
-    {r:0.38,segments:8, gap:0.12,width:2.0,baseAlpha:0.6, speed: 0.008},
-    {r:0.52,segments:12,gap:0.08,width:1.5,baseAlpha:0.45,speed:-0.006},
-    {r:0.68,segments:16,gap:0.06,width:1.2,baseAlpha:0.32,speed: 0.005},
-    {r:0.82,segments:6, gap:0.18,width:2.5,baseAlpha:0.55,speed:-0.009},
-    {r:1.05,segments:24,gap:0.04,width:0.8,baseAlpha:0.22,speed: 0.004},
-    {r:1.20,segments:10,gap:0.10,width:1.8,baseAlpha:0.38,speed:-0.007},
-    {r:1.38,segments:32,gap:0.03,width:0.6,baseAlpha:0.15,speed: 0.003},
-    {r:1.55,segments:8, gap:0.14,width:2.2,baseAlpha:0.28,speed:-0.005},
-  ];
-  for (const ring of rings) {
-    const sa = Math.PI*2/ring.segments;
-    for (let s=0;s<ring.segments;s++) ORB.reactorArcs.push({...ring,segIdx:s,
-      startAngle:s*sa,endAngle:s*sa+sa*(1-ring.gap),offset:0,pulse:Math.random()*Math.PI*2});
-  }
-}
-
-function buildParticles() {
-  ORB.particles = [];
-  for (let i=0;i<180;i++) {
-    const theta=Math.random()*Math.PI*2, phi=Math.acos(2*Math.random()-1), r=0.7+Math.random()*1.8;
-    ORB.particles.push({theta,phi,r,baseR:r,speed:(Math.random()-0.5)*0.008,
-      phiSpeed:(Math.random()-0.5)*0.003,size:0.5+Math.random()*2.5,
-      opacity:0.2+Math.random()*0.6,pulse:Math.random()*Math.PI*2,pSpeed:0.5+Math.random()*2.0});
-  }
-}
-
-function buildDataStreams() {
-  ORB.dataStreams = [];
-  for (let i=0;i<16;i++) {
-    ORB.dataStreams.push({angle:Math.PI*2*i/16+Math.random()*0.3,startR:0.4+Math.random()*0.3,
-      length:0.3+Math.random()*0.8,speed:0.4+Math.random()*1.2,progress:Math.random(),
-      width:0.5+Math.random()*1.5,opacity:0.15+Math.random()*0.4,segments:Math.floor(3+Math.random()*8)});
-  }
-}
-
-function buildOrbitRings() {
-  ORB.orbitRings = [];
-  [{tiltX:0.3,tiltZ:0.1,r:1.18,speed:0.006,width:1.0,alpha:0.5,dashes:[20,8],glyphs:6},
-   {tiltX:-0.8,tiltZ:0.5,r:1.30,speed:-0.009,width:1.5,alpha:0.4,dashes:[8,12],glyphs:4},
-   {tiltX:1.1,tiltZ:-0.3,r:1.45,speed:0.007,width:0.8,alpha:0.3,dashes:[4,16],glyphs:8},
-   {tiltX:-0.2,tiltZ:0.9,r:1.60,speed:-0.005,width:2.0,alpha:0.25,dashes:[30,10],glyphs:3},
-   {tiltX:0.6,tiltZ:-0.7,r:1.78,speed:0.004,width:0.6,alpha:0.18,dashes:[6,20],glyphs:12}]
-  .forEach(cfg => ORB.orbitRings.push({...cfg,angle:Math.random()*Math.PI*2}));
-}
-
-function buildCircuitNodes() {
-  ORB.circuitNodes = [];
-  for (let i=0;i<24;i++) {
-    ORB.circuitNodes.push({angle:Math.random()*Math.PI*2,r:0.5+Math.random()*0.9,x:0,y:0,
-      size:1.5+Math.random()*3,pulse:Math.random()*Math.PI*2,pSpeed:0.8+Math.random()*2,
-      connections:[],opacity:0.3+Math.random()*0.5});
-  }
-  for (let i=0;i<ORB.circuitNodes.length;i++) for (let j=i+1;j<ORB.circuitNodes.length;j++) {
-    const ni=ORB.circuitNodes[i],nj=ORB.circuitNodes[j];
-    if (Math.abs(ni.angle-nj.angle)<0.7&&Math.abs(ni.r-nj.r)<0.3&&ni.connections.length<3) ni.connections.push(j);
-  }
-}
-
-function buildArcBolts() {
-  ORB.arcBolts=[];
-  for (let i=0;i<6;i++) ORB.arcBolts.push({active:false,timer:Math.random()*3,startAngle:0,endAngle:0,startR:0,endR:0,points:[]});
-}
-
-function project3D(lat,lon,rotY,rotX,radius) {
-  const x0=Math.cos(lat)*Math.cos(lon),y0=Math.sin(lat),z0=Math.cos(lat)*Math.sin(lon);
-  const x1=x0*Math.cos(rotY)-z0*Math.sin(rotY),z1=x0*Math.sin(rotY)+z0*Math.cos(rotY);
-  const y2=y0*Math.cos(rotX)-z1*Math.sin(rotX),z2=y0*Math.sin(rotX)+z1*Math.cos(rotX);
-  const fov=4.0,scale=fov/(fov+z2);
-  return {x:ORB.cx+x1*radius*scale,y:ORB.cy+y2*radius*scale,depth:(z2+1)/2,scale};
-}
-
-function sphereToCanvas(lat,lon){return project3D(lat,lon,ORB.rotY,ORB.rotX,ORB.liveR);}
-
-function drawHexAt(x,y,size,col,alpha,filled){
-  ctx.beginPath();
-  for(let i=0;i<6;i++){const a=Math.PI/3*i-Math.PI/6;i===0?ctx.moveTo(x+size*Math.cos(a),y+size*Math.sin(a)):ctx.lineTo(x+size*Math.cos(a),y+size*Math.sin(a));}
-  ctx.closePath();ctx.globalAlpha=alpha;
-  if(filled){ctx.fillStyle=`rgb(${col})`;ctx.fill();}
-  ctx.strokeStyle=`rgb(${col})`;ctx.lineWidth=0.7;ctx.stroke();ctx.globalAlpha=1;
-}
-
-function makeLightning(x1,y1,x2,y2,segments,jitter){
-  const pts=[{x:x1,y:y1}];
-  for(let i=1;i<segments;i++){const t=i/segments;pts.push({x:x1+(x2-x1)*t+(Math.random()-0.5)*jitter,y:y1+(y2-y1)*t+(Math.random()-0.5)*jitter});}
-  pts.push({x:x2,y:y2});return pts;
-}
-
-function drawJarvisInterface(ts) {
-  ORB.phase=ts*0.001; ORB.breathe=ts*0.00055;
-  liveColor.r+=(targetColor.r-liveColor.r)*0.05;
-  liveColor.g+=(targetColor.g-liveColor.g)*0.05;
-  liveColor.b+=(targetColor.b-liveColor.b)*0.05;
-  const rc=Math.round(liveColor.r),gc=Math.round(liveColor.g),bc=Math.round(liveColor.b);
-  const col=`${rc},${gc},${bc}`;
-
-  let st=1.0;
-  if(ORB.mode===3)st=1.0+ORB.listenAmp*0.08+Math.sin(ORB.phase*10)*0.015;
-  else if(ORB.mode===2)st=1.0+ORB.speakAmp*0.10+Math.sin(ORB.phase*8)*0.012;
-  else if(ORB.mode===1)st=1.0+Math.sin(ORB.phase*4)*0.025;
-  else st=1.0+Math.sin(ORB.breathe*0.8)*0.010;
-  ORB.liveScale+=(st-ORB.liveScale)*0.08; ORB.liveR=ORB.R*ORB.liveScale;
-
-  let et=0.12;
-  if(ORB.mode===1)et=0.45+Math.abs(Math.sin(ORB.phase*3))*0.3;
-  if(ORB.mode===2)et=0.55+ORB.speakAmp*0.45;
-  if(ORB.mode===3)et=0.40+ORB.listenAmp*0.45;
-  ORB.energy+=(et-ORB.energy)*0.06;
-
-  const rs=ORB.mode===2?0.008:ORB.mode===3?0.007:ORB.mode===1?0.005:0.002;
-  ORB.rotY+=rs; ORB.rotX=0.28+Math.sin(ts*0.00025)*0.22;
-  ORB.hexFrameAngle+=0.0015+ORB.energy*0.003;
-  ORB.scanAngle+=0.018+ORB.energy*0.025;
-  ORB.depthAngle+=0.001;
-
-  for(const o of ORB.orbitRings)o.angle+=o.speed*(1+ORB.energy*0.6);
-  for(const a of ORB.reactorArcs)a.offset+=a.speed*(1+ORB.energy*0.4);
-  for(let i=0;i<ORB.waveform.length;i++){
-    const tg=ORB.mode>=2?(Math.sin(ORB.phase*8+i*0.4)*0.5+0.5)*ORB.energy*(ORB.mode===2?ORB.speakAmp:ORB.listenAmp)*0.8:Math.abs(Math.sin(ORB.phase*1.5+i*0.3))*0.08*ORB.energy;
-    ORB.waveform[i]+=(tg-ORB.waveform[i])*0.25;
-  }
-  for(const p of ORB.particles){p.theta+=p.speed*(1+ORB.energy*0.5);p.phi+=p.phiSpeed;p.r=p.baseR+Math.sin(ORB.phase*p.pSpeed+p.pulse)*0.1;}
-  for(const bolt of ORB.arcBolts){
-    bolt.timer-=0.016;
-    if(bolt.timer<=0){
-      if(!bolt.active&&ORB.energy>0.3&&Math.random()<0.15){
-        bolt.active=true;bolt.timer=0.08+Math.random()*0.12;
-        bolt.startAngle=Math.random()*Math.PI*2;bolt.endAngle=bolt.startAngle+(Math.random()-0.5)*2;
-        bolt.startR=(0.9+Math.random()*0.2)*ORB.liveR;bolt.endR=(0.9+Math.random()*0.2)*ORB.liveR;
-        bolt.points=makeLightning(ORB.cx+Math.cos(bolt.startAngle)*bolt.startR,ORB.cy+Math.sin(bolt.startAngle)*bolt.startR,ORB.cx+Math.cos(bolt.endAngle)*bolt.endR,ORB.cy+Math.sin(bolt.endAngle)*bolt.endR,8,14);
-      } else {bolt.active=false;bolt.timer=0.5+Math.random()*2.0;}
-    }
-  }
-  for(const ds of ORB.dataStreams)ds.progress=(ds.progress+ds.speed*0.004*(1+ORB.energy))%1;
-
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  const R=ORB.liveR,cx=ORB.cx,cy=ORB.cy;
-
-  const atmos=ctx.createRadialGradient(cx,cy,R*0.1,cx,cy,R*3.5);
-  atmos.addColorStop(0,`rgba(${col},${(0.04+ORB.energy*0.04).toFixed(3)})`);
-  atmos.addColorStop(0.3,`rgba(${col},${(0.015+ORB.energy*0.015).toFixed(3)})`);
-  atmos.addColorStop(0.7,`rgba(${col},0.004)`);atmos.addColorStop(1,`rgba(${col},0)`);
-  ctx.fillStyle=atmos;ctx.beginPath();ctx.arc(cx,cy,R*3.5,0,Math.PI*2);ctx.fill();
-
-  for(const p of ORB.particles){
-    const px=cx+Math.sin(p.phi)*Math.cos(p.theta)*p.r*R,py=cy+Math.sin(p.phi)*Math.sin(p.theta)*p.r*R*0.65;
-    const pz=Math.cos(p.phi),df=(pz+1)/2;
-    const pa=p.opacity*df*(0.4+ORB.energy*0.4)*(0.7+Math.sin(ORB.phase*p.pSpeed+p.pulse)*0.3);
-    if(pa<0.02)continue;
-    ctx.beginPath();ctx.arc(px,py,p.size*(0.5+df*0.5)*(0.8+ORB.energy*0.3),0,Math.PI*2);
-    ctx.fillStyle=`rgba(${col},${pa.toFixed(3)})`;ctx.fill();
-  }
-
-  const vhex=ORB.hexTiles.map(h=>({h,pt:sphereToCanvas(h.lat,h.lon)})).filter(({pt})=>pt.depth>0.1).sort((a,b)=>a.pt.depth-b.pt.depth);
-  for(const{h,pt}of vhex){
-    const df=pt.depth,pa=(0.12+Math.sin(ORB.phase*h.speed+h.pulse)*0.06)*df*(0.5+ORB.energy*0.8);
-    const sz=h.size*R*pt.scale*0.92;
-    if(h.active)drawHexAt(pt.x,pt.y,sz,col,Math.min(1,(0.35+Math.sin(ORB.phase*3+h.activePulse)*0.25)*df*(0.5+ORB.energy)),true);
-    drawHexAt(pt.x,pt.y,sz,col,Math.min(1,pa),false);
-  }
-
-  ctx.save();ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);ctx.clip();
-  const bg=ctx.createRadialGradient(cx-R*0.15,cy-R*0.15,R*0.01,cx+R*0.4,cy+R*0.5,R*1.4);
-  bg.addColorStop(0,`rgba(${rc},${gc},${bc},0.06)`);bg.addColorStop(0.35,`rgba(${Math.round(rc*0.4)},${Math.round(gc*0.4)},${Math.round(bc*0.4)},0.18)`);
-  bg.addColorStop(0.7,'rgba(0,0,0,0.55)');bg.addColorStop(1,'rgba(0,0,0,0.85)');
-  ctx.fillStyle=bg;ctx.fillRect(cx-R,cy-R,R*2,R*2);
-
-  const dx=cx-R*0.30,dy=cy-R*0.28,diff=ctx.createRadialGradient(dx,dy,0,dx,dy,R*1.55);
-  diff.addColorStop(0,`rgba(${col},${(0.42+ORB.energy*0.22).toFixed(3)})`);
-  diff.addColorStop(0.25,`rgba(${col},${(0.22+ORB.energy*0.12).toFixed(3)})`);
-  diff.addColorStop(0.55,`rgba(${col},${(0.07+ORB.energy*0.05).toFixed(3)})`);
-  diff.addColorStop(0.80,`rgba(${col},0.015)`);diff.addColorStop(1,`rgba(${col},0)`);
-  ctx.fillStyle=diff;ctx.fillRect(cx-R,cy-R,R*2,R*2);
-
-  const sx=cx+R*0.38,sy=cy+R*0.42,ds=ctx.createRadialGradient(sx,sy,0,sx,sy,R*1.1);
-  ds.addColorStop(0,'rgba(0,0,0,0.72)');ds.addColorStop(0.4,'rgba(0,0,0,0.45)');
-  ds.addColorStop(0.75,'rgba(0,0,0,0.12)');ds.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=ds;ctx.fillRect(cx-R,cy-R,R*2,R*2);
-
-  const s1x=cx-R*0.28,s1y=cy-R*0.30,sp1=ctx.createRadialGradient(s1x,s1y,0,s1x,s1y,R*0.52);
-  sp1.addColorStop(0,`rgba(255,255,255,${(0.88+ORB.energy*0.12).toFixed(3)})`);
-  sp1.addColorStop(0.08,`rgba(255,255,255,${(0.55+ORB.energy*0.1).toFixed(3)})`);
-  sp1.addColorStop(0.20,`rgba(255,248,220,${(0.22+ORB.energy*0.08).toFixed(3)})`);
-  sp1.addColorStop(0.45,`rgba(${col},${(0.08+ORB.energy*0.04).toFixed(3)})`);sp1.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=sp1;ctx.fillRect(cx-R,cy-R,R*2,R*2);
-
-  const sp2=ctx.createRadialGradient(cx-R*0.18,cy-R*0.22,0,cx-R*0.18,cy-R*0.22,R*0.85);
-  sp2.addColorStop(0,`rgba(255,255,255,${(0.18+ORB.energy*0.10).toFixed(3)})`);
-  sp2.addColorStop(0.30,`rgba(${col},${(0.10+ORB.energy*0.06).toFixed(3)})`);
-  sp2.addColorStop(0.65,`rgba(${col},${(0.02+ORB.energy*0.02).toFixed(3)})`);sp2.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=sp2;ctx.fillRect(cx-R,cy-R,R*2,R*2);
-
-  const cg=ctx.createRadialGradient(cx,cy,0,cx,cy,R*0.75);
-  cg.addColorStop(0,`rgba(${col},${(0.10+ORB.energy*0.25).toFixed(3)})`);
-  cg.addColorStop(0.35,`rgba(${col},${(0.04+ORB.energy*0.10).toFixed(3)})`);
-  cg.addColorStop(0.7,`rgba(${col},${(0.01+ORB.energy*0.03).toFixed(3)})`);cg.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=cg;ctx.fillRect(cx-R,cy-R,R*2,R*2);ctx.restore();
-
-  ctx.beginPath();ctx.arc(cx,cy,R,0,Math.PI*2);
-  ctx.strokeStyle=`rgba(${col},${(0.55+ORB.energy*0.35).toFixed(3)})`;ctx.lineWidth=1.2;ctx.stroke();
-  ctx.beginPath();ctx.arc(cx,cy,R+1,0,Math.PI*2);
-  ctx.strokeStyle=`rgba(${col},${(0.18+ORB.energy*0.22).toFixed(3)})`;ctx.lineWidth=8+ORB.energy*10;ctx.stroke();
-  ctx.beginPath();ctx.arc(cx,cy,R,Math.PI*1.1,Math.PI*1.75);
-  ctx.strokeStyle=`rgba(255,255,255,${(0.12+ORB.energy*0.10).toFixed(3)})`;ctx.lineWidth=2.5;ctx.stroke();
-
-  const sey=cy+R*0.88,sell=ctx.createRadialGradient(cx,sey,0,cx,sey,R*0.9);
-  sell.addColorStop(0,'rgba(0,0,0,0.30)');sell.addColorStop(0.5,'rgba(0,0,0,0.12)');sell.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.save();ctx.scale(1,0.3);ctx.beginPath();ctx.arc(cx,sey/0.3,R*0.85,0,Math.PI*2);ctx.fillStyle=sell;ctx.fill();ctx.restore();
-
-  for(const arc of ORB.reactorArcs){
-    const rr=arc.r*R,st2=arc.startAngle+arc.offset,en=arc.endAngle+arc.offset;
-    const pa=arc.baseAlpha*(0.6+Math.sin(ORB.phase*2+arc.pulse)*0.25)*(0.5+ORB.energy*0.6);
-    ctx.beginPath();ctx.arc(cx,cy,rr,st2,en);
-    ctx.strokeStyle=`rgba(${col},${Math.min(1,pa).toFixed(3)})`;ctx.lineWidth=arc.width*(0.8+ORB.energy*0.4);ctx.stroke();
-  }
-
-  for(const ring of ORB.orbitRings){
-    ctx.save();ctx.translate(cx,cy);ctx.rotate(ring.angle);ctx.scale(1,Math.cos(ring.tiltX));
-    ctx.beginPath();ctx.arc(0,0,ring.r*R,0,Math.PI*2);ctx.setLineDash(ring.dashes);
-    ctx.strokeStyle=`rgba(${col},${(ring.alpha*(0.7+ORB.energy*0.3)).toFixed(3)})`;
-    ctx.lineWidth=ring.width;ctx.stroke();ctx.setLineDash([]);ctx.restore();
-  }
-
-  for(const node of ORB.circuitNodes){
-    node.pulse+=node.pSpeed*0.016;
-    node.x=cx+Math.cos(node.angle+ORB.rotY*0.3)*node.r*R*0.85;
-    node.y=cy+Math.sin(node.angle+ORB.rotY*0.3)*node.r*R*0.55;
-    const na=node.opacity*(0.5+Math.sin(node.pulse)*0.3)*(0.4+ORB.energy*0.6);
-    ctx.beginPath();ctx.arc(node.x,node.y,node.size*(0.8+ORB.energy*0.4),0,Math.PI*2);
-    ctx.fillStyle=`rgba(${col},${na.toFixed(3)})`;ctx.fill();
-    for(const ci of node.connections){
-      const other=ORB.circuitNodes[ci];if(!other)continue;
-      ctx.beginPath();ctx.moveTo(node.x,node.y);ctx.lineTo(other.x,other.y);
-      ctx.strokeStyle=`rgba(${col},${(na*0.4).toFixed(3)})`;ctx.lineWidth=0.5;ctx.stroke();
-    }
-  }
-
-  for(const d of ORB.dataStreams){
-    const ax=Math.cos(d.angle+ORB.rotY*0.2),ay=Math.sin(d.angle+ORB.rotY*0.2)*0.6;
-    const x1=cx+ax*d.startR*R,y1=cy+ay*d.startR*R,x2=cx+ax*(d.startR+d.length)*R,y2=cy+ay*(d.startR+d.length)*R;
-    const gr=ctx.createLinearGradient(x1,y1,x2,y2);
-    const p1=d.progress,p2=Math.min(1,d.progress+0.3);
-    gr.addColorStop(0,`rgba(${col},0)`);gr.addColorStop(Math.max(0,p1-0.05),`rgba(${col},0)`);
-    gr.addColorStop(p1,`rgba(${col},${(d.opacity*(0.5+ORB.energy)).toFixed(3)})`);
-    gr.addColorStop(p2,`rgba(${col},0)`);gr.addColorStop(1,`rgba(${col},0)`);
-    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.strokeStyle=gr;ctx.lineWidth=d.width;ctx.stroke();
-  }
-
-  const hfr=R*1.10;ctx.save();ctx.translate(cx,cy);ctx.rotate(ORB.hexFrameAngle);
-  for(let s=0;s<6;s++){
-    const a1=Math.PI*2*s/6,a2=Math.PI*2*(s+1)/6,tick=R*0.06;
-    ctx.beginPath();ctx.moveTo(Math.cos(a1)*hfr,Math.sin(a1)*hfr);ctx.lineTo(Math.cos(a2)*hfr,Math.sin(a2)*hfr);
-    ctx.strokeStyle=`rgba(${col},${(0.35+ORB.energy*0.3).toFixed(3)})`;ctx.lineWidth=1.0+ORB.energy*0.5;ctx.stroke();
-    ctx.beginPath();ctx.moveTo(Math.cos(a1)*hfr,Math.sin(a1)*hfr);ctx.lineTo(Math.cos(a1)*(hfr+tick),Math.sin(a1)*(hfr+tick));
-    ctx.strokeStyle=`rgba(${col},${(0.6+ORB.energy*0.3).toFixed(3)})`;ctx.lineWidth=1.5;ctx.stroke();
-  }
-  ctx.restore();
-
-  const hfr2=R*1.25;ctx.save();ctx.translate(cx,cy);ctx.rotate(-ORB.hexFrameAngle*0.7+Math.PI/6);
-  for(let s=0;s<6;s++){
-    const a1=Math.PI*2*s/6,a2=Math.PI*2*(s+1)/6;
-    ctx.beginPath();ctx.moveTo(Math.cos(a1)*hfr2,Math.sin(a1)*hfr2);ctx.lineTo(Math.cos(a2)*hfr2,Math.sin(a2)*hfr2);
-    ctx.setLineDash([6,10]);ctx.strokeStyle=`rgba(${col},${(0.18+ORB.energy*0.2).toFixed(3)})`;ctx.lineWidth=0.8;ctx.stroke();ctx.setLineDash([]);
-  }
-  ctx.restore();
-
-  if(ORB.mode>=1||ORB.energy>0.15){
-    const wR=R*0.92,wC=ORB.waveform.length,wa=0.15+ORB.energy*0.5;
-    ctx.beginPath();
-    for(let i=0;i<=wC;i++){const a=Math.PI*2*i/wC,r=wR+ORB.waveform[i%wC]*R*0.25;i===0?ctx.moveTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r):ctx.lineTo(cx+Math.cos(a)*r,cy+Math.sin(a)*r);}
-    ctx.closePath();ctx.strokeStyle=`rgba(${col},${wa.toFixed(3)})`;ctx.lineWidth=1.2+ORB.energy*1.5;ctx.stroke();
-    ctx.fillStyle=`rgba(${col},${(wa*0.08).toFixed(3)})`;ctx.fill();
-  }
-
-  for(const bolt of ORB.arcBolts){
-    if(!bolt.active||bolt.points.length<2)continue;
-    ctx.beginPath();ctx.moveTo(bolt.points[0].x,bolt.points[0].y);
-    for(let bi=1;bi<bolt.points.length;bi++)ctx.lineTo(bolt.points[bi].x,bolt.points[bi].y);
-    ctx.strokeStyle=`rgba(${col},0.8)`;ctx.lineWidth=1.0;ctx.stroke();
-    ctx.beginPath();ctx.moveTo(bolt.points[0].x,bolt.points[0].y);
-    for(let bi=1;bi<bolt.points.length;bi++)ctx.lineTo(bolt.points[bi].x,bolt.points[bi].y);
-    ctx.strokeStyle='rgba(255,255,255,0.35)';ctx.lineWidth=3.0;ctx.stroke();
-  }
-
-  if(ORB.mode===3){for(let i=1;i<=5;i++){const rr=R*(1.0+i*0.08+((ORB.phase*0.8+i*0.3)%0.8));ctx.beginPath();ctx.arc(cx,cy,rr,0,Math.PI*2);ctx.strokeStyle=`rgba(${col},${Math.max(0,0.25-i*0.04)*(0.5+ORB.listenAmp*0.5)})`;ctx.lineWidth=1.2;ctx.stroke();}}
-  if(ORB.mode===2){for(let i=1;i<=6;i++){const rr=R*(0.95+i*0.07+Math.sin(ORB.phase*(5+i))*0.02*ORB.speakAmp),ra=(0.22-i*0.025)*(0.5+ORB.speakAmp*0.8);if(ra<=0)continue;ctx.beginPath();ctx.arc(cx,cy,rr,0,Math.PI*2);ctx.strokeStyle=`rgba(${col},${ra.toFixed(3)})`;ctx.lineWidth=0.8+ORB.speakAmp;ctx.stroke();}}
-  if(ORB.mode===1){for(let i=0;i<4;i++){const aS=ORB.phase*(1.5+i*0.4)+i*Math.PI*0.5,aE=aS+0.4+ORB.energy*0.6+Math.sin(ORB.phase*4+i)*0.2;ctx.beginPath();ctx.arc(cx,cy,R*(1.02+i*0.025),aS,aE);ctx.strokeStyle=`rgba(${col},${(0.5+ORB.energy*0.3).toFixed(3)})`;ctx.lineWidth=2.0-i*0.3;ctx.stroke();}}
-
-  const hs=R*0.18,hg=R*1.15,ha=0.22+ORB.energy*0.18;
-  for(const c of [{dx:-1,dy:-1},{dx:1,dy:-1},{dx:1,dy:1},{dx:-1,dy:1}]){
-    const bx=cx+c.dx*hg,by=cy+c.dy*hg;
-    ctx.strokeStyle=`rgba(${col},${ha.toFixed(3)})`;ctx.lineWidth=1.2;
-    ctx.beginPath();ctx.moveTo(bx+c.dx*-hs,by);ctx.lineTo(bx,by);ctx.lineTo(bx,by+c.dy*-hs);ctx.stroke();
-  }
-
-  ctx.beginPath();ctx.arc(cx,cy,R*0.14,0,Math.PI*2);
-  ctx.strokeStyle=`rgba(${col},${(0.5+ORB.energy*0.4).toFixed(3)})`;ctx.lineWidth=1.5;ctx.stroke();
-  ctx.save();ctx.translate(cx,cy);ctx.rotate(ORB.phase*0.5);ctx.beginPath();
-  for(let i=0;i<3;i++){const ta=Math.PI*2*i/3-Math.PI/2;i===0?ctx.moveTo(Math.cos(ta)*R*0.09,Math.sin(ta)*R*0.09):ctx.lineTo(Math.cos(ta)*R*0.09,Math.sin(ta)*R*0.09);}
-  ctx.closePath();ctx.strokeStyle=`rgba(${col},${(0.6+ORB.energy*0.3).toFixed(3)})`;ctx.lineWidth=1.2;ctx.stroke();ctx.restore();
-
-  const cr=18+ORB.energy*22,core=ctx.createRadialGradient(cx,cy,0,cx,cy,cr);
-  core.addColorStop(0,'rgba(255,255,255,0.98)');core.addColorStop(0.15,`rgba(${col},0.95)`);
-  core.addColorStop(0.5,`rgba(${col},0.4)`);core.addColorStop(1,`rgba(${col},0)`);
-  ctx.fillStyle=core;ctx.beginPath();ctx.arc(cx,cy,cr,0,Math.PI*2);ctx.fill();
-  ctx.beginPath();ctx.arc(cx,cy,3.5+ORB.energy*2.5,0,Math.PI*2);ctx.fillStyle='rgba(255,255,255,1)';ctx.fill();
-
-  requestAnimationFrame(drawJarvisInterface);
-}
-
-function setOrbMode(mode) {
-  const map={idle:0,thinking:1,speaking:2,listening:3};
-  ORB.mode=map[mode]!==undefined?map[mode]:0;
-  document.body.className='orb-'+mode;
-  const labels={idle:'IDLE',thinking:'PROCESSING…',speaking:'SPEAKING',listening:'LISTENING'};
-  document.getElementById('state-label').textContent=labels[mode]||'IDLE';
+function sendTextTurn(text) {
+  if (!liveWs || liveWs.readyState !== WebSocket.OPEN) return;
+  liveWs.send(JSON.stringify({
+    realtimeInput: { text }
+  }));
+  setOrbMode('thinking'); isThinking = true; isListening = true;
+  const txEl = document.getElementById('transcript-text');
+  txEl.textContent = text.length > 90 ? text.slice(0, 90) + '…' : text;
 }
 
 /* ─────────────────────────────────────────────────────
    TOAST
 ───────────────────────────────────────────────────── */
-var toastTimer=null;
-function showToast(msg){
-  var el=document.getElementById('toast');
-  el.textContent=msg;el.classList.add('show');
-  if(toastTimer)clearTimeout(toastTimer);
-  toastTimer=setTimeout(()=>el.classList.remove('show'),2600);
+var toastTimer = null;
+function showToast(msg) {
+  var el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ el.classList.remove('show'); }, 2600);
+}
+
+/* ─────────────────────────────────────────────────────
+   AGENT INDICATOR (UI update helpers)
+───────────────────────────────────────────────────── */
+function updateAgentUI() {
+  const agent = AGENTS[activeAgent];
+  document.getElementById('agent-label').textContent = agent.label;
+  document.getElementById('jarvis-label').textContent = agent.label;
+  const agentGenderIcon = document.getElementById('agent-gender-icon');
+  if (agentGenderIcon) {
+    agentGenderIcon.textContent = agent.gender === 'female' ? '♀ P.R.I.Y.A' : '♂ V.I.V.E.K';
+  }
+}
+
+/* ─────────────────────────────────────────────────────
+   BOOT
+───────────────────────────────────────────────────── */
+var bootLines = ['bl1','bl2','bl3','bl4','bl5'];
+var bootIdx = 0, bootPct = 0;
+
+function runBoot() {
+  var bar = document.getElementById('boot-bar');
+  var pct = document.getElementById('boot-pct');
+  var iv  = setInterval(function() {
+    bootPct += 1.8;
+    bar.style.width  = Math.min(bootPct, 100) + '%';
+    pct.textContent  = Math.min(Math.floor(bootPct), 100) + '%';
+    if (bootPct % 20 < 1.9 && bootIdx < bootLines.length) {
+      var el = document.getElementById(bootLines[bootIdx]);
+      if (el) { el.style.opacity = '1'; el.classList.add('ok'); }
+      bootIdx++;
+    }
+    if (bootPct >= 100) {
+      clearInterval(iv);
+      setTimeout(function() {
+        var overlay = document.getElementById('boot-overlay');
+        overlay.style.opacity = '0';
+        setTimeout(async function() {
+          overlay.style.display = 'none';
+          // Load persisted state
+          loadInstructions();
+          const savedAgent = localStorage.getItem('vivek_active_agent') || 'vivek';
+          activeAgent = savedAgent;
+          updateAgentUI();
+          setColor(AGENTS[activeAgent].color);
+          
+          const txEl = document.getElementById('transcript-text');
+          const loaded = await fetchApiKey();
+          if (loaded) {
+            txEl.textContent = 'Listening…';
+            txEl.classList.add('active');
+            setTimeout(() => startGeminiSession(null), 900);
+          } else {
+            txEl.textContent = 'Backend offline. Check BACKEND_URL in app.js.'; txEl.classList.add('active');
+          }
+        }, 900);
+      }, 280);
+    }
+  }, 25);
 }
 
 /* ─────────────────────────────────────────────────────
@@ -1117,9 +1605,18 @@ window.addEventListener('resize', resizeCanvas);
 requestAnimationFrame(drawJarvisInterface);
 runBoot();
 
-canvas.addEventListener('click', () => { if (gestureUnlocked && isSpeaking) stopSpeaking(); });
-document.addEventListener('keydown', e => {
-  if (!gestureUnlocked) return;
-  if (e.key==='p'||e.key==='P') switchAgent(activeAgent==='vivek'?'priya':'vivek');
-  if (e.key==='Escape') stopSpeaking();
+canvas.addEventListener('click', function() {
+  ensureAudioCtx();
+  if (isSpeaking || isListening || isThinking) stopAll();
+  else if (isDormant && apiKey) { connectFails = 0; startGeminiSession(null); }
+  else if (!apiKey) showToast('BACKEND NOT CONNECTED');
+});
+
+/* Quick agent toggle button */
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'p' || e.key === 'P') {
+    if (activeAgent === 'vivek') switchAgent('priya');
+    else switchAgent('vivek');
+  }
+  if (e.key === 'Escape') stopAll();
 });
