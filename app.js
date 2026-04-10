@@ -237,12 +237,12 @@ let messages = [];
 const COMMANDS = {
   STOP:        text => /\b(stop|stop it|stop karo|ruko|ruk jao|bas|bus|chup|chup ho jao|chup karo|band karo|band kar do|rukiye|rok do|ruk|khamosh|khamosh ho jao|mat bolo)\b/.test(text),
   SWITCH_VIVEK: text => /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/.test(text),
-  SWITCH_PRIYA: text => /\b(ESHA_DILDEEP|prya|preya|priyaa)\b/.test(text),
+  SWITCH_ESHA_DILDEEP: text => /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa)\b/.test(text),
 };
 
 function detectCommand(normalizedText) {
   if (COMMANDS.STOP(normalizedText))        return 'STOP';
-  if (COMMANDS.SWITCH_PRIYA(normalizedText)) return 'SWITCH_PRIYA';
+  if (COMMANDS.SWITCH_ESHA_DILDEEP(normalizedText)) return 'SWITCH_ESHA_DILDEEP';
   if (COMMANDS.SWITCH_VIVEK(normalizedText)) return 'SWITCH_VIVEK';
   return null;
 }
@@ -348,7 +348,7 @@ MUSIC CAPABILITY: You can play any song on Spotify directly in the browser. When
     gender: 'female',
     color: 'pink',
     geminiVoice: 'Aoede',
-    wakeWord: /\b(ESHA_DILDEEP|prya|preya|priyaa)\b/i,
+    wakeWord: /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa)\b/i,
     greeting: "",
     buildPrompt: (instructions) => `You are ESHA_DILDEEP — the female AI agent of your creator, activated when Boss needs a different perspective or assistance in Hindi and English.
 
@@ -1392,9 +1392,9 @@ function isSwitchToVivek(normalizedText) {
     || /\b(switch to vivek|back to vivek|call vivek|activate vivek|male agent)\b/.test(normalizedText);
 }
 
-function isSwitchToPriya(normalizedText) {
+function isSwitchToESHA_DILDEEP(normalizedText) {
   // Match "ESHA_DILDEEP" anywhere in the utterance (at start, alone, or as command)
-  return /\b(ESHA_DILDEEP|prya|preya|priyaa)\b/.test(normalizedText)
+  return /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa)\b/.test(normalizedText)
     || /\b(switch to ESHA_DILDEEP|call ESHA_DILDEEP|activate ESHA_DILDEEP|female agent)\b/.test(normalizedText);
 }
 
@@ -1573,10 +1573,10 @@ function startWakeDetection() {
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const t = e.results[i][0].transcript.toLowerCase().trim();
       const vivekWake = /\b(vivek|vi vek|viveek|bivek|vibek|vivec|viveck|wivek|vivak|vyvek|veevek)\b/i.test(t);
-      const priyaWake = /\b(ESHA_DILDEEP|prya|preya|priyaa)\b/i.test(t);
+      const ESHA_DILDEEPWake = /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa)\b/i.test(t);
       
       // Switch to ESHA_DILDEEP if "ESHA_DILDEEP" detected (only if not already on ESHA_DILDEEP)
-      if (priyaWake && activeAgent !== 'ESHA_DILDEEP') {
+      if (ESHA_DILDEEPWake && activeAgent !== 'ESHA_DILDEEP') {
         stopWakeDetection(); switchAgent('ESHA_DILDEEP');
         const trailing = t.split(/ESHA_DILDEEP/i).slice(1).join('').replace(/[.,!?]/g, '').trim();
         startGeminiSession(trailing || null); return;
@@ -1778,12 +1778,12 @@ async function startGeminiSession(initialText) {
         }
 
         // Agent switching commands - always process regardless of current agent
-        const textSwitchesPriya = /\b(ESHA_DILDEEP|prya|preya|priyaa|call ESHA_DILDEEP|switch to ESHA_DILDEEP)\b/i.test(normalized);
+        const textSwitchesESHA_DILDEEP = /\b(ESHA_DILDEEP|prya|preya|ESHA_DILDEEPa|call ESHA_DILDEEP|switch to ESHA_DILDEEP)\b/i.test(normalized);
         const textSwitchesVivek = /\b(vivek|vi vek|viveek|switch to vivek|call vivek)\b/i.test(normalized);
         
-        console.log('[VIVEK] User said:', userSaid, '| Normalized:', normalized, '| Switch ESHA_DILDEEP:', textSwitchesPriya, '| Switch Vivek:', textSwitchesVivek, '| Current agent:', activeAgent);
+        console.log('[VIVEK] User said:', userSaid, '| Normalized:', normalized, '| Switch ESHA_DILDEEP:', textSwitchesESHA_DILDEEP, '| Switch Vivek:', textSwitchesVivek, '| Current agent:', activeAgent);
         
-        if (textSwitchesPriya && activeAgent !== 'ESHA_DILDEEP') {
+        if (textSwitchesESHA_DILDEEP && activeAgent !== 'ESHA_DILDEEP') {
           console.log('[VIVEK] Switching to ESHA_DILDEEP');
           stopCurrentResponseOnly();
           restartAfterClosePending = true;
