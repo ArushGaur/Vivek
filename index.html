@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>V.I.V.E.K — Dual Agent Neural Interface</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🟠</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -35,6 +36,9 @@
   <span id="agent-gender-icon">♂ V.I.V.E.K</span>
   <button id="agent-switch-btn" onclick="switchAgentToggle()" title="Switch Agent (P key)">⇄ SWITCH</button>
 </div>
+
+<!-- GRAPH BUTTON -->
+<button id="graph-btn" onclick="openDesmosGraph('')" title="Open Graph Calculator">⬡ GRAPH</button>
 
 <!-- AGENT LABEL (hidden, used for JS reference) -->
 <span id="agent-label" style="display:none">V.I.V.E.K</span>
@@ -76,10 +80,11 @@
   <div class="modal-content">
     <div class="modal-header">
       <span>GRAPH CALCULATOR</span>
+      <button style="background:none;border:1px solid rgba(255,154,0,.4);color:#ff9a00;font-size:11px;padding:4px 10px;cursor:pointer;letter-spacing:.1em;margin-right:10px;" onclick="openDesmosGraph('x^2')">TEST: y=x²</button>
       <button class="modal-close" onclick="closeDesmosModal()">×</button>
     </div>
     <div class="modal-body">
-      <iframe id="desmos-frame" src="about:blank" allow="clipboard-read; clip-board-write"></iframe>
+      <iframe id="desmos-frame" src="about:blank" allow="clipboard-read; clipboard-write"></iframe>
     </div>
   </div>
 </div>
