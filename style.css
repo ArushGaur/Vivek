@@ -457,3 +457,41 @@ body::after {
   cursor: pointer;
 }
 #instructions-clear:hover { color: rgba(255,60,60,.9); border-color: rgba(255,60,60,.6); }
+
+/* ── GRAPH BUTTON ───────────────────────────────── */
+#graph-btn {
+  position: fixed; top: 36px; right: 24px;
+  background: rgba(0,0,0,0.55); border: 1px solid rgba(255,154,0,.35);
+  color: rgba(255,154,0,.7); font-family: var(--font-hud);
+  font-size: 0.52rem; letter-spacing: .16em; padding: 7px 16px;
+  cursor: pointer; z-index: 200; border-radius: 2px;
+  backdrop-filter: blur(8px); transition: all 0.2s;
+}
+#graph-btn:hover {
+  border-color: rgba(255,154,0,.9); color: #ff9a00;
+  box-shadow: 0 0 16px rgba(255,154,0,.3); background: rgba(255,154,0,.08);
+}
+
+/* ── MUSIC BAR ───────────────────────────────────── */
+#music-bar {
+  position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(0,0,0,0.6); border: 1px solid rgba(255,154,0,.2);
+  padding: 6px 10px; border-radius: 3px; backdrop-filter: blur(10px); z-index: 200;
+}
+#music-input {
+  background: transparent; border: 1px solid rgba(255,154,0,.25);
+  color: rgba(255,154,0,.9); font-family: var(--font-mono); font-size: 0.6rem;
+  letter-spacing: .08em; padding: 5px 10px; width: 160px; outline: none; border-radius: 2px;
+}
+#music-input::placeholder { color: rgba(255,154,0,.3); }
+#music-input:focus { border-color: rgba(255,154,0,.6); }
+#music-play-btn, #music-pause-btn, #music-skip-btn {
+  background: transparent; border: 1px solid rgba(255,154,0,.3);
+  color: rgba(255,154,0,.7); font-family: var(--font-hud);
+  font-size: 0.5rem; padding: 5px 10px; cursor: pointer;
+  letter-spacing: .1em; border-radius: 2px; transition: all 0.2s;
+}
+#music-play-btn:hover, #music-pause-btn:hover, #music-skip-btn:hover {
+  border-color: rgba(255,154,0,.8); color: #ff9a00; background: rgba(255,154,0,.07);
+}
