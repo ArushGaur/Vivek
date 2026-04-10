@@ -665,6 +665,6 @@ initDB().then(() => {
       }).on('error', (err) => {
         console.warn('[VIVEK] Self-ping failed:', err.message);
       });
-    }, 10 * 60 * 1000); // every 10 minutes
+    }, 10 * 60 * 1000); // every 10 minuteS
   });
 });
