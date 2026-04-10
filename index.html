@@ -82,21 +82,9 @@
 </div>
 
 <!-- GRAPH BUTTON -->
-<button id="graph-btn" onclick="openDesmosGraph('')" title="Open Graph Calculator">⬡ GRAPH</button>
+<button id="graph-btn" onclick="openDesmosGraph('')" title="Open Desmos Graph Calculator">⬡ GRAPH</button>
 
-<!-- DESMOS GRAPH MODAL -->
-<div id="desmos-modal" class="modal">
-  <div class="modal-content">
-    <div class="modal-header">
-      <span>GRAPH CALCULATOR</span>
-      <button style="background:none;border:1px solid rgba(255,154,0,.4);color:#ff9a00;font-size:11px;padding:4px 10px;cursor:pointer;letter-spacing:.1em;margin-right:10px;" onclick="openDesmosGraph('x^2')">TEST: y=x²</button>
-      <button class="modal-close" onclick="closeDesmosModal()">×</button>
-    </div>
-    <div class="modal-body">
-      <iframe id="desmos-frame" src="about:blank" allow="clipboard-read; clipboard-write"></iframe>
-    </div>
-  </div>
-</div>
+<!-- Desmos modal removed — graph opens directly in new tab -->
 
 <script>
 function musicBarPlay() {
