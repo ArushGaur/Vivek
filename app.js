@@ -1969,18 +1969,61 @@ function openDesmosGraph(equation) {
     if (!/^[a-zA-Z]\s*=/.test(expr)) expr = 'y=' + expr;
   }
 
-  // Build Desmos URL and open directly in a new tab — no iframe/blob needed
-  const baseUrl = 'https://www.desmos.com/calculator';
-  const url = expr
-    ? baseUrl + '?equation=' + encodeURIComponent(expr)
-    : baseUrl;
+  let url = 'https://www.desmos.com/calculator';
+  if (expr) {
+    const state = {
+      version: 9,
+      expressions: {
+        list: [{ type: 'expression', id: '1', color: '#ff9a00', latex: expr }]
+      }
+    };
+    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
+    url = 'https://www.desmos.com/calculator#' + encoded;
+  }
 
-  window.open(url, '_blank');
-  showToast('GRAPH OPENED — ' + (expr || 'DESMOS'));
+  // Remove any existing overlay
+  const existing = document.getElementById('desmos-overlay');
+  if (existing) existing.remove();
 
+  // Build full-screen overlay with iframe — works without popup permission
+  const overlay = document.createElement('div');
+  overlay.id = 'desmos-overlay';
+  overlay.style.cssText = `
+    position:fixed; top:0; left:0; width:100%; height:100%; z-index:9999;
+    background:rgba(0,0,0,0.92); display:flex; flex-direction:column;
+  `;
+
+  const header = document.createElement('div');
+  header.style.cssText = `
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 18px; background:#0a0a1a;
+    border-bottom:1px solid rgba(255,154,0,0.3); flex-shrink:0;
+  `;
+  header.innerHTML = `
+    <span style="color:#ff9a00;font-family:'Orbitron',monospace;font-size:13px;letter-spacing:.15em;">
+      ⬡ GRAPH CALCULATOR${expr ? ' — ' + expr : ''}
+    </span>
+    <button onclick="document.getElementById('desmos-overlay').remove()"
+      style="background:none;border:1px solid rgba(255,154,0,0.4);color:#ff9a00;
+             font-size:12px;padding:5px 14px;cursor:pointer;letter-spacing:.1em;
+             font-family:'Orbitron',monospace;">
+      ✕ CLOSE
+    </button>
+  `;
+
+  const frame = document.createElement('iframe');
+  frame.src = url;
+  frame.style.cssText = 'flex:1; width:100%; border:none;';
+  frame.allow = 'clipboard-read; clipboard-write';
+
+  overlay.appendChild(header);
+  overlay.appendChild(frame);
+  document.body.appendChild(overlay);
+
+  showToast('GRAPH OPENED');
   const txEl = document.getElementById('transcript-text');
   if (txEl) { txEl.textContent = 'Graph opened — Sir'; txEl.classList.add('active'); }
-  console.log('[VIVEK] Desmos opened:', url);
+  console.log('[VIVEK] Desmos overlay opened:', url);
 }
 
 function extractEquationFromSpeech(text) {
