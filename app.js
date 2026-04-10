@@ -1963,30 +1963,22 @@ function showToast(msg) {
 ───────────────────────────────────────────────────── */
 
 function openDesmosGraph(equation) {
-  let expr = '';
-  if (equation && equation.trim()) {
-    expr = equation.trim();
-    if (!/^[a-zA-Z]\s*=/.test(expr)) expr = 'y=' + expr;
-  }
+  const expr = (equation && equation.trim()) ? equation.trim() : '';
+  const url = 'graph.html' + (expr ? '?eq=' + encodeURIComponent(expr) : '');
 
-  let url = 'https://www.desmos.com/calculator';
-  if (expr) {
-    const state = {
-      version: 9,
-      expressions: {
-        list: [{ type: 'expression', id: '1', color: '#ff9a00', latex: expr }]
-      }
-    };
-    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
-    url = 'https://www.desmos.com/calculator#' + encoded;
-  }
+  // Anchor click opens new tab reliably even from async voice callbacks
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 
-  // Directly navigate to Desmos — works from both sync and async contexts
-  showToast('OPENING DESMOS...');
+  showToast('GRAPH OPENED');
   const txEl = document.getElementById('transcript-text');
-  if (txEl) { txEl.textContent = 'Redirecting to Desmos graph — Sir'; txEl.classList.add('active'); }
-  console.log('[VIVEK] Redirecting to Desmos:', url);
-  window.location.href = url;
+  if (txEl) { txEl.textContent = 'Graph opened in new tab — Sir'; txEl.classList.add('active'); }
+  console.log('[VIVEK] Graph tab opened:', url);
 }
 
 
